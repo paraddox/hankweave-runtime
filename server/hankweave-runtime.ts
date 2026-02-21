@@ -39,6 +39,7 @@ import {
   isServerStateEvent,
 } from "./schemas/event-schemas.js";
 import { SentinelConfigLoader } from "./sentinels/sentinel-config-loader.js";
+import { createAgentSdkSentinelFallback, type AgentSdkSentinelFallback } from "./sentinels/agent-sdk-sentinel-fallback.js";
 import { SentinelManager } from "./sentinels/sentinel-manager.js";
 import { StateManager } from "./state-manager.js";
 import { FileEventStorage } from "./storage/file-event-storage.js";
@@ -214,6 +215,7 @@ export class HankweaveRuntime extends TypedEventEmitter<ServerInternalEvents> {
   private sentinelManager: SentinelManager;
   private sentinelConfigLoader: SentinelConfigLoader;
   private currentCodonSentinels = new Set<string>();
+  private agentSdkFallback: AgentSdkSentinelFallback | null = null;
 
   // LLM registry for cost calculations
   private llmRegistry: LlmProviderRegistry;
@@ -5897,6 +5899,10 @@ export class HankweaveRuntime extends TypedEventEmitter<ServerInternalEvents> {
         }
       }
 
+      // Agent SDK OAuth fallback: when no API key but OAuth token exists
+      this.agentSdkFallback?.dispose();
+      this.agentSdkFallback = createAgentSdkSentinelFallback(configs, this.logger);
+
       // SentinelManager internally unloads previous codon's sentinels
       const { loadedIds } = await this.sentinelManager.loadSentinelsForCodon(
         configs,
@@ -5907,8 +5913,7 @@ export class HankweaveRuntime extends TypedEventEmitter<ServerInternalEvents> {
           executionPath: this.config.executionPath,
           agentRootPath: this.config.agentRootPath, // For sentinel output path resolution
           outputPathsMap: outputPathsMap.size > 0 ? outputPathsMap : undefined,
-          // Note: llmCallOverride and llmObjectCallOverride are only used in tests
-          // In production, SentinelManager uses its own provider registry
+          llmCallOverride: this.agentSdkFallback?.llmCallFn,
         },
       );
 
@@ -6488,7 +6493,9 @@ export class HankweaveRuntime extends TypedEventEmitter<ServerInternalEvents> {
 
     this.cleanupCurrentCodon();
 
-    // Shutdown sentinel manager
+    // Shutdown sentinel manager and Agent SDK fallback
+    this.agentSdkFallback?.dispose();
+    this.agentSdkFallback = null;
     if (this.sentinelManager) {
       this.logger.log("Shutting down sentinel manager...", "info");
       await this.sentinelManager.shutdown();
