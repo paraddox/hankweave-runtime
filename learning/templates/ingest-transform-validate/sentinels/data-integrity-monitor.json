@@ -1,0 +1,34 @@
+{
+  "id": "data-integrity-monitor",
+  "name": "Data Integrity Monitor",
+  "description": "Monitors data counts and integrity scores at the entry point to ensure no data loss during ingestion",
+  "trigger": {
+    "type": "event",
+    "on": ["assistant.action", "tool.result"]
+  },
+  "execution": {
+    "strategy": "immediate"
+  },
+  "model": "anthropic/claude-haiku-4-5",
+  "systemPromptText": "You are a data integrity monitor. Your job is to track the number of data items being processed and detect any signs of data loss, corruption, or quality degradation.\n\n## WHAT TO TRACK\n\n### Item Counts\n- How many items were found in the source data\n- How many items were successfully read\n- How many items had quality issues\n\n### Integrity Signals\n- File read errors or encoding issues\n- Truncated or incomplete data\n- Missing expected fields\n- Format inconsistencies\n\n### Quality Indicators\n- Percentage of items successfully processed\n- Distribution of data quality scores\n- Anomalies in data patterns\n\nReturn a structured summary of current integrity metrics.",
+  "userPromptText": "Monitor these ingestion events for data integrity. Track item counts and quality metrics.\n\nEvents:\n<%= JSON.stringify(it.events, null, 2) %>\n\nReturn the current integrity metrics.",
+  "output": {
+    "format": "json",
+    "file": "data-integrity-metrics.json"
+  },
+  "structuredOutput": {
+    "output": "object",
+    "schemaStr": "{\"type\":\"object\",\"properties\":{\"itemsIn\":{\"type\":\"integer\",\"description\":\"Total items found in source\"},\"itemsProcessed\":{\"type\":\"integer\",\"description\":\"Items successfully processed\"},\"itemsFailed\":{\"type\":\"integer\",\"description\":\"Items that failed processing\"},\"integrityScore\":{\"type\":\"number\",\"minimum\":0,\"maximum\":100,\"description\":\"Overall integrity score 0-100\"},\"issues\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"type\":{\"type\":\"string\"},\"description\":{\"type\":\"string\"},\"severity\":{\"type\":\"string\",\"enum\":[\"critical\",\"warning\",\"info\"]}},\"required\":[\"type\",\"description\",\"severity\"]}}},\"required\":[\"itemsIn\",\"itemsProcessed\",\"integrityScore\"]}",
+    "schemaName": "DataIntegrityMetrics",
+    "schemaDescription": "Structured data integrity metrics tracking items processed and quality scores"
+  },
+  "llmParams": {
+    "temperature": 0,
+    "maxOutputTokens": 4096,
+    "maxRetries": 2
+  },
+  "errorHandling": {
+    "maxConsecutiveFailures": 3,
+    "unloadOnFatalError": true
+  }
+}

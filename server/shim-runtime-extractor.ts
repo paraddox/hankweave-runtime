@@ -35,7 +35,7 @@ const SHIM_VERSION = getMetadata().version;
 const EMBEDDED_SHIM_PATH = "shims";
 
 // Available shims
-const SHIM_NAMES = ["gemini", "codex"] as const;
+const SHIM_NAMES = ["gemini", "codex", "headless"] as const;
 type ShimName = (typeof SHIM_NAMES)[number];
 
 /**

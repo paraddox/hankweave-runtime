@@ -1,0 +1,37 @@
+{
+  "id": "bias-detector",
+  "name": "Bias and Balance Detector",
+  "description": "Monitors draft content for loaded language, unsupported claims, and perspective imbalance",
+  "trigger": {
+    "type": "event",
+    "on": ["assistant.action"]
+  },
+  "execution": {
+    "strategy": "debounce",
+    "milliseconds": 5000
+  },
+  "model": "anthropic/claude-haiku-4-5",
+  "systemPromptText": "You are a bias detection specialist reviewing content as it is being written. Your job is to flag potential issues with objectivity, balance, and evidence quality.\n\n## WHAT TO DETECT\n\n### 1. LOADED LANGUAGE\n- Emotionally charged words that could indicate bias\n- Superlatives without evidence (\"the best\", \"the worst\")\n- Weasel words (\"some people say\", \"it is widely known\")\n\n### 2. UNSUPPORTED CLAIMS\n- Factual assertions without citations\n- Statistics without sources\n- Causal claims without evidence\n- Generalizations from insufficient evidence\n\n### 3. PERSPECTIVE IMBALANCE\n- Only one side of a debate presented\n- Counterarguments dismissed without engagement\n- Selection bias in source material\n- Missing stakeholder perspectives\n\nBe specific and constructive. Flag issues with exact quotes and suggest improvements.",
+  "userPromptText": "Review these recent writing events for bias, loaded language, unsupported claims, or perspective imbalance.\n\nEvents:\n<%= JSON.stringify(it.events, null, 2) %>\n\n## OUTPUT RULES\n\n1. Only flag genuine concerns — not every strong statement is biased\n2. Include the exact text that triggered the concern\n3. Suggest specific improvements\n4. Skip if no issues detected — silence is fine\n\nFormat:\n## [ISSUE TYPE]: Brief description\n**Text**: \"exact quote from the draft\"\n**Concern**: Why this is problematic\n**Suggestion**: How to improve it",
+  "conversational": {
+    "trimmingStrategy": {
+      "type": "maxTurns",
+      "maxTurns": 30
+    },
+    "continueOnError": true
+  },
+  "output": {
+    "format": "text",
+    "file": "bias-detector-observations.md"
+  },
+  "joinString": "\n\n---\n\n",
+  "llmParams": {
+    "temperature": 0,
+    "maxOutputTokens": 4096,
+    "maxRetries": 2
+  },
+  "errorHandling": {
+    "maxConsecutiveFailures": 5,
+    "unloadOnFatalError": false
+  }
+}

@@ -78,6 +78,13 @@
               "exclusiveMinimum": 0,
               "maximum": 600,
               "description": "Default shim idle timeout for all codons in this hank (seconds)"
+            },
+            "shims": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Custom shim registrations. Maps provider IDs to shim paths or names. Example: { \"custom-provider\": \"./path/to/shim.js\" }. Built-in providers (google, openai, headless) are always available."
             }
           },
           "additionalProperties": false,
@@ -241,6 +248,149 @@
                             "command"
                           ],
                           "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "fetch",
+                              "description": "Fetch content from a URL"
+                            },
+                            "fetch": {
+                              "type": "object",
+                              "properties": {
+                                "url": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "description": "URL to fetch content from"
+                                },
+                                "to": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "description": "Target path relative to projectPath for the downloaded content"
+                                },
+                                "headers": {
+                                  "type": "object",
+                                  "additionalProperties": {
+                                    "type": "string"
+                                  },
+                                  "description": "Optional HTTP headers to include with the request"
+                                },
+                                "timeout": {
+                                  "type": "integer",
+                                  "exclusiveMinimum": 0,
+                                  "default": 30000,
+                                  "description": "Request timeout in milliseconds (default: 30000)"
+                                }
+                              },
+                              "required": [
+                                "url",
+                                "to"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "allowFailure": {
+                              "type": "boolean",
+                              "default": false,
+                              "description": "If true, failure of this operation won't fail the codon (default: false)."
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "fetch"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "template",
+                              "description": "Render a template with variables"
+                            },
+                            "template": {
+                              "type": "object",
+                              "properties": {
+                                "from": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "description": "Path to the template file (relative to config file or absolute)"
+                                },
+                                "to": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "description": "Target path relative to projectPath for the rendered output"
+                                },
+                                "variables": {
+                                  "type": "object",
+                                  "additionalProperties": {
+                                    "type": [
+                                      "string",
+                                      "number",
+                                      "boolean"
+                                    ]
+                                  },
+                                  "default": {},
+                                  "description": "Template variables to substitute. Uses Eta template syntax (<%= varName %>)."
+                                }
+                              },
+                              "required": [
+                                "from",
+                                "to"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "allowFailure": {
+                              "type": "boolean",
+                              "default": false,
+                              "description": "If true, failure of this operation won't fail the codon (default: false)."
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "template"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "validate",
+                              "description": "Pre-execution validation that can abort before the codon starts"
+                            },
+                            "validate": {
+                              "type": "object",
+                              "properties": {
+                                "command": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "description": "Shell command to run for validation. Exit code 0 = pass, non-zero = fail."
+                                },
+                                "message": {
+                                  "type": "string",
+                                  "description": "Custom error message if validation fails"
+                                }
+                              },
+                              "required": [
+                                "command"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "allowFailure": {
+                              "type": "boolean",
+                              "default": false,
+                              "description": "If true, validation failure won't fail the codon (default: false)."
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "validate"
+                          ],
+                          "additionalProperties": false
                         }
                       ]
                     },
@@ -325,6 +475,33 @@
                       "additionalProperties": false
                     },
                     "description": "Optional output copy steps to run after codon completion: files to copy out from a completed codon, with optional pre-copy commands."
+                  },
+                  "expectedOutputs": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Expected output file path (glob pattern or exact path, relative to agent root)"
+                        },
+                        "description": {
+                          "type": "string",
+                          "description": "Description of what this output contains"
+                        },
+                        "required": {
+                          "type": "boolean",
+                          "default": true,
+                          "description": "Whether this output is required for the codon to be considered successful (default: true)"
+                        }
+                      },
+                      "required": [
+                        "path"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "description": "Structured output declarations. Declares expected outputs from this codon, enabling validation after completion and informing downstream codons about available artifacts. Use for non-programming hanks where outputs aren't obvious from code context."
                   },
                   "sentinels": {
                     "type": "array",
@@ -1098,6 +1275,18 @@
                     "exclusiveMinimum": 0,
                     "maximum": 600,
                     "description": "Max seconds between agent events before the shim aborts (idle timeout). Overrides hank-level and runtime defaults. If unset, falls back to hank override, runtime config, or shim default (120s)."
+                  },
+                  "tools": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Tool names available to this codon. Used primarily with headless models to configure which tools the LLM can use. Available tools: Read, Write, Edit, Bash, LS, Glob, Grep, WebFetch, WebSearch. If omitted, a default set is used (Read, Write, Edit, Bash, LS, Glob, Grep)."
+                  },
+                  "maxTokens": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "description": "Maximum output tokens per LLM call. Used primarily with headless models. Default: 8192."
                   }
                 },
                 "required": [
@@ -1322,6 +1511,149 @@
                                   "command"
                                 ],
                                 "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "const": "fetch",
+                                    "description": "Fetch content from a URL"
+                                  },
+                                  "fetch": {
+                                    "type": "object",
+                                    "properties": {
+                                      "url": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "description": "URL to fetch content from"
+                                      },
+                                      "to": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "description": "Target path relative to projectPath for the downloaded content"
+                                      },
+                                      "headers": {
+                                        "type": "object",
+                                        "additionalProperties": {
+                                          "type": "string"
+                                        },
+                                        "description": "Optional HTTP headers to include with the request"
+                                      },
+                                      "timeout": {
+                                        "type": "integer",
+                                        "exclusiveMinimum": 0,
+                                        "default": 30000,
+                                        "description": "Request timeout in milliseconds (default: 30000)"
+                                      }
+                                    },
+                                    "required": [
+                                      "url",
+                                      "to"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  "allowFailure": {
+                                    "type": "boolean",
+                                    "default": false,
+                                    "description": "If true, failure of this operation won't fail the codon (default: false)."
+                                  }
+                                },
+                                "required": [
+                                  "type",
+                                  "fetch"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "const": "template",
+                                    "description": "Render a template with variables"
+                                  },
+                                  "template": {
+                                    "type": "object",
+                                    "properties": {
+                                      "from": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "description": "Path to the template file (relative to config file or absolute)"
+                                      },
+                                      "to": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "description": "Target path relative to projectPath for the rendered output"
+                                      },
+                                      "variables": {
+                                        "type": "object",
+                                        "additionalProperties": {
+                                          "type": [
+                                            "string",
+                                            "number",
+                                            "boolean"
+                                          ]
+                                        },
+                                        "default": {},
+                                        "description": "Template variables to substitute. Uses Eta template syntax (<%= varName %>)."
+                                      }
+                                    },
+                                    "required": [
+                                      "from",
+                                      "to"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  "allowFailure": {
+                                    "type": "boolean",
+                                    "default": false,
+                                    "description": "If true, failure of this operation won't fail the codon (default: false)."
+                                  }
+                                },
+                                "required": [
+                                  "type",
+                                  "template"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "const": "validate",
+                                    "description": "Pre-execution validation that can abort before the codon starts"
+                                  },
+                                  "validate": {
+                                    "type": "object",
+                                    "properties": {
+                                      "command": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "description": "Shell command to run for validation. Exit code 0 = pass, non-zero = fail."
+                                      },
+                                      "message": {
+                                        "type": "string",
+                                        "description": "Custom error message if validation fails"
+                                      }
+                                    },
+                                    "required": [
+                                      "command"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  "allowFailure": {
+                                    "type": "boolean",
+                                    "default": false,
+                                    "description": "If true, validation failure won't fail the codon (default: false)."
+                                  }
+                                },
+                                "required": [
+                                  "type",
+                                  "validate"
+                                ],
+                                "additionalProperties": false
                               }
                             ]
                           },
@@ -1406,6 +1738,33 @@
                             "additionalProperties": false
                           },
                           "description": "Optional output copy steps to run after codon completion: files to copy out from a completed codon, with optional pre-copy commands."
+                        },
+                        "expectedOutputs": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "path": {
+                                "type": "string",
+                                "minLength": 1,
+                                "description": "Expected output file path (glob pattern or exact path, relative to agent root)"
+                              },
+                              "description": {
+                                "type": "string",
+                                "description": "Description of what this output contains"
+                              },
+                              "required": {
+                                "type": "boolean",
+                                "default": true,
+                                "description": "Whether this output is required for the codon to be considered successful (default: true)"
+                              }
+                            },
+                            "required": [
+                              "path"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "description": "Structured output declarations. Declares expected outputs from this codon, enabling validation after completion and informing downstream codons about available artifacts. Use for non-programming hanks where outputs aren't obvious from code context."
                         },
                         "sentinels": {
                           "type": "array",
@@ -2179,6 +2538,18 @@
                           "exclusiveMinimum": 0,
                           "maximum": 600,
                           "description": "Max seconds between agent events before the shim aborts (idle timeout). Overrides hank-level and runtime defaults. If unset, falls back to hank override, runtime config, or shim default (120s)."
+                        },
+                        "tools": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          },
+                          "description": "Tool names available to this codon. Used primarily with headless models to configure which tools the LLM can use. Available tools: Read, Write, Edit, Bash, LS, Glob, Grep, WebFetch, WebSearch. If omitted, a default set is used (Read, Write, Edit, Bash, LS, Glob, Grep)."
+                        },
+                        "maxTokens": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "description": "Maximum output tokens per LLM call. Used primarily with headless models. Default: 8192."
                         }
                       },
                       "required": [

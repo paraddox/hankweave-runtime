@@ -1,0 +1,105 @@
+{
+  "$schema": "https://unpkg.com/hankweave@latest/schemas/hank.schema.json",
+  "meta": {
+    "name": "Ingest-Transform-Validate",
+    "version": "1.0.0",
+    "description": "Data processing pipeline that ingests raw data, classifies it, applies transformations, validates results, and packages output. Features integrity monitoring, transformation fidelity tracking, and validation gates.",
+    "author": "Hankweave Templates"
+  },
+  "hank": [
+    {
+      "id": "ingest",
+      "name": "Ingest: Load and inventory source data",
+      "description": "Read and catalog all source data, establishing baseline integrity metrics",
+      "model": "headless:google/gemini-2.5-pro",
+      "continuationMode": "fresh",
+      "promptFile": "./prompts/1-ingest.md",
+      "tools": ["Read", "Write", "Glob"],
+      "onFailure": "retry",
+      "retryConfig": { "maxAttempts": 2, "delayMs": 2000 },
+      "sentinels": [
+        {
+          "sentinelConfig": "./sentinels/data-integrity-monitor.json",
+          "settings": {
+            "failCodonIfNotLoaded": true
+          }
+        }
+      ],
+      "rigSetup": [
+        {
+          "type": "command",
+          "command": { "run": "mkdir -p ingested classified transformed validated output" }
+        }
+      ],
+      "checkpointedFiles": ["ingested/**/*"]
+    },
+    {
+      "id": "classify",
+      "name": "Classify: Categorize and tag data items",
+      "description": "Analyze ingested data and assign categories, types, and processing tags",
+      "model": "headless:anthropic/claude-sonnet-4-6",
+      "continuationMode": "continue-previous",
+      "promptFile": "./prompts/2-classify.md",
+      "tools": ["Read", "Write"],
+      "checkpointedFiles": ["classified/**/*"]
+    },
+    {
+      "id": "transform",
+      "name": "Transform: Apply transformations to classified data",
+      "description": "Transform data according to classification, preserving semantic meaning",
+      "model": "headless:anthropic/claude-opus-4-6",
+      "continuationMode": "fresh",
+      "promptFile": "./prompts/3-transform.md",
+      "tools": ["Read", "Write", "Edit"],
+      "onFailure": "retry",
+      "retryConfig": { "maxAttempts": 2, "delayMs": 1000 },
+      "sentinels": [
+        {
+          "sentinelConfig": "./sentinels/transformation-fidelity.json",
+          "settings": {
+            "failCodonIfNotLoaded": false
+          }
+        }
+      ],
+      "checkpointedFiles": ["transformed/**/*"]
+    },
+    {
+      "id": "validate",
+      "name": "Validate: Verify transformation correctness",
+      "description": "Comprehensive validation of transformed data against source and schema",
+      "model": "headless:anthropic/claude-opus-4-6",
+      "continuationMode": "fresh",
+      "promptFile": "./prompts/4-validate.md",
+      "tools": ["Read", "Write"],
+      "onFailure": "abort",
+      "sentinels": [
+        {
+          "sentinelConfig": "./sentinels/validation-gate.json",
+          "settings": {
+            "failCodonIfNotLoaded": true
+          }
+        }
+      ],
+      "rigSetup": [
+        {
+          "type": "validate",
+          "validate": {
+            "command": "test -d transformed && test $(ls transformed/ | wc -l) -gt 0",
+            "message": "No transformed data found — transform phase may not have completed"
+          }
+        }
+      ],
+      "checkpointedFiles": ["validated/**/*"]
+    },
+    {
+      "id": "package",
+      "name": "Package: Assemble final output",
+      "description": "Package validated data into the final output format with metadata",
+      "model": "headless:anthropic/claude-sonnet-4-6",
+      "continuationMode": "fresh",
+      "promptFile": "./prompts/5-package.md",
+      "tools": ["Read", "Write"],
+      "checkpointedFiles": ["output/**/*"]
+    }
+  ]
+}

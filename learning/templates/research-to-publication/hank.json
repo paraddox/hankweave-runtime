@@ -1,0 +1,100 @@
+{
+  "$schema": "https://unpkg.com/hankweave@latest/schemas/hank.schema.json",
+  "meta": {
+    "name": "Research-to-Publication",
+    "version": "1.0.0",
+    "description": "Multi-phase pipeline that transforms raw research topics into polished, publication-ready documents. Features cross-model review loops and sentinel-based quality gates.",
+    "author": "Hankweave Templates"
+  },
+  "hank": [
+    {
+      "id": "research",
+      "name": "Research: Gather and explore sources",
+      "description": "Deep research phase using high-context model to gather comprehensive source material",
+      "model": "headless:google/gemini-2.5-pro",
+      "continuationMode": "fresh",
+      "promptFile": "./prompts/1-research.md",
+      "tools": ["@research"],
+      "rigSetup": [
+        {
+          "type": "command",
+          "command": { "run": "mkdir -p research sources drafts output" }
+        }
+      ],
+      "checkpointedFiles": ["research/**/*", "sources/**/*"]
+    },
+    {
+      "id": "synthesize",
+      "name": "Synthesize: Organize findings into structure",
+      "description": "Distill research into a coherent outline with key themes and supporting evidence",
+      "model": "headless:anthropic/claude-opus-4-6",
+      "continuationMode": "fresh",
+      "promptFile": "./prompts/2-synthesize.md",
+      "tools": ["@minimal", "Edit"],
+      "checkpointedFiles": ["research/**/*"]
+    },
+    {
+      "id": "draft",
+      "name": "Draft: Write the initial document",
+      "description": "Transform the synthesis into a complete first draft",
+      "model": "headless:anthropic/claude-sonnet-4-6",
+      "continuationMode": "fresh",
+      "promptFile": "./prompts/3-draft.md",
+      "tools": ["Read", "Write", "Edit"],
+      "sentinels": [
+        {
+          "sentinelConfig": "./sentinels/bias-detector.json",
+          "settings": {
+            "failCodonIfNotLoaded": false
+          }
+        }
+      ],
+      "checkpointedFiles": ["drafts/**/*"]
+    },
+    {
+      "type": "loop",
+      "id": "review-revise-loop",
+      "name": "Review-Revise: Iterative quality improvement",
+      "terminateOn": { "type": "iterationLimit", "limit": 3 },
+      "codons": [
+        {
+          "id": "review",
+          "name": "Review: Cross-model quality assessment",
+          "description": "Independent review using a different model for fresh perspective",
+          "model": "headless:google/gemini-2.5-pro",
+          "continuationMode": "fresh",
+          "promptFile": "./prompts/4-review.md",
+          "tools": ["Read", "Write"],
+          "sentinels": [
+            {
+              "sentinelConfig": "./sentinels/quality-gate.json",
+              "settings": {
+                "failCodonIfNotLoaded": false
+              }
+            }
+          ]
+        },
+        {
+          "id": "revise",
+          "name": "Revise: Address review feedback",
+          "description": "Incorporate review feedback and improve the draft",
+          "model": "headless:anthropic/claude-sonnet-4-6",
+          "continuationMode": "fresh",
+          "promptFile": "./prompts/5-revise.md",
+          "tools": ["Read", "Write", "Edit"],
+          "checkpointedFiles": ["drafts/**/*"]
+        }
+      ]
+    },
+    {
+      "id": "polish",
+      "name": "Polish: Final formatting and cleanup",
+      "description": "Final pass for tone, consistency, and formatting",
+      "model": "headless:anthropic/claude-sonnet-4-6",
+      "continuationMode": "fresh",
+      "promptFile": "./prompts/6-polish.md",
+      "tools": ["Read", "Write"],
+      "checkpointedFiles": ["output/**/*"]
+    }
+  ]
+}

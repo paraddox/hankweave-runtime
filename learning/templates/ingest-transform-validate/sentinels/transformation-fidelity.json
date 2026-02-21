@@ -1,0 +1,37 @@
+{
+  "id": "transformation-fidelity",
+  "name": "Transformation Fidelity Monitor",
+  "description": "Monitors semantic preservation during data transformation, flagging cases where meaning may be lost or distorted",
+  "trigger": {
+    "type": "event",
+    "on": ["assistant.action"]
+  },
+  "execution": {
+    "strategy": "debounce",
+    "milliseconds": 5000
+  },
+  "model": "anthropic/claude-haiku-4-5",
+  "systemPromptText": "You are a transformation fidelity specialist. Your job is to monitor data transformations and flag cases where semantic meaning may be lost, distorted, or incorrectly mapped.\n\n## WHAT TO MONITOR\n\n### Semantic Preservation\n- Does the transformed output retain the core meaning of the source?\n- Are relationships between data elements preserved?\n- Is context maintained through the transformation?\n\n### Common Fidelity Issues\n- Lossy conversions (precision loss, truncation)\n- Incorrect mapping between source and target fields\n- Category errors (items placed in wrong categories)\n- Loss of nuance in text transformations\n- Aggregation errors that mask important details\n\n### Quality Signals\n- Large batches transformed identically (may indicate template errors)\n- Unusually short output compared to input\n- Missing fields in output that existed in source\n\nBe specific about which transformations concern you and why.",
+  "userPromptText": "Monitor these transformation events for semantic fidelity. Flag any cases where data meaning may be lost or distorted.\n\nEvents:\n<%= JSON.stringify(it.events, null, 2) %>\n\n## OUTPUT RULES\n\n1. Only flag genuine fidelity concerns\n2. Include specific examples of potential meaning loss\n3. Rate severity: critical (data loss), warning (quality degradation), info (potential concern)\n4. Skip if no issues — silence is fine\n\nFormat:\n## [SEVERITY]: Brief description\n**Source**: [what the original data said]\n**Output**: [what the transformation produced]\n**Concern**: [why this may indicate fidelity loss]\n**Suggestion**: [how to verify or fix]",
+  "conversational": {
+    "trimmingStrategy": {
+      "type": "maxTurns",
+      "maxTurns": 40
+    },
+    "continueOnError": true
+  },
+  "output": {
+    "format": "text",
+    "file": "transformation-fidelity-observations.md"
+  },
+  "joinString": "\n\n---\n\n",
+  "llmParams": {
+    "temperature": 0,
+    "maxOutputTokens": 4096,
+    "maxRetries": 2
+  },
+  "errorHandling": {
+    "maxConsecutiveFailures": 5,
+    "unloadOnFatalError": false
+  }
+}

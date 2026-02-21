@@ -6,6 +6,7 @@ import { validateModel } from "./config-validation/model-validator.js";
 import { codonSentinelEntrySchema } from "./config-validation/sentinel.schema.js";
 import { LlmProviderRegistry } from "./llm/llm-provider-registry.js";
 import type { ModelInfo } from "./llm/models-dev-schema.js";
+import { ShimRegistry } from "./shim-registry.js";
 import { type TelemetryConfig, telemetryConfigSchema } from "./telemetry/telemetry-types.js";
 import { CodonId } from "./types/branded-types.js";
 import type { ModelName, ShimSelfTestResult } from "./types/types.js";
@@ -264,6 +265,76 @@ export const rigSetupItemSchema = z.discriminatedUnion("type", [
         "If true, failure of this operation won't fail the codon (default: false). Recommended for rig setup in loop codons where operations might fail in some iterations (e.g., running commands that might not succeed initially).",
       ),
   }),
+  z.object({
+    type: z.literal("fetch").describe("Fetch content from a URL"),
+    fetch: z.object({
+      url: z
+        .string()
+        .min(1, "URL cannot be empty")
+        .describe("URL to fetch content from"),
+      to: z
+        .string()
+        .min(1, "Target path cannot be empty")
+        .describe("Target path relative to projectPath for the downloaded content"),
+      headers: z
+        .record(z.string())
+        .optional()
+        .describe("Optional HTTP headers to include with the request"),
+      timeout: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .default(30000)
+        .describe("Request timeout in milliseconds (default: 30000)"),
+    }),
+    allowFailure: z
+      .boolean()
+      .optional()
+      .default(false)
+      .describe("If true, failure of this operation won't fail the codon (default: false)."),
+  }),
+  z.object({
+    type: z.literal("template").describe("Render a template with variables"),
+    template: z.object({
+      from: z
+        .string()
+        .min(1, "Template source path cannot be empty")
+        .describe("Path to the template file (relative to config file or absolute)"),
+      to: z
+        .string()
+        .min(1, "Target path cannot be empty")
+        .describe("Target path relative to projectPath for the rendered output"),
+      variables: z
+        .record(z.union([z.string(), z.number(), z.boolean()]))
+        .optional()
+        .default({})
+        .describe("Template variables to substitute. Uses Eta template syntax (<%= varName %>)."),
+    }),
+    allowFailure: z
+      .boolean()
+      .optional()
+      .default(false)
+      .describe("If true, failure of this operation won't fail the codon (default: false)."),
+  }),
+  z.object({
+    type: z.literal("validate").describe("Pre-execution validation that can abort before the codon starts"),
+    validate: z.object({
+      command: z
+        .string()
+        .min(1, "Validation command cannot be empty")
+        .describe("Shell command to run for validation. Exit code 0 = pass, non-zero = fail."),
+      message: z
+        .string()
+        .optional()
+        .describe("Custom error message if validation fails"),
+    }),
+    allowFailure: z
+      .boolean()
+      .optional()
+      .default(false)
+      .describe("If true, validation failure won't fail the codon (default: false)."),
+  }),
 ]);
 
 // Output copy item schema (array of these under codon.outputFiles)
@@ -417,6 +488,30 @@ export const codonObjectSchema = z.object({
   outputFiles: codonOutputSchema.describe(
     "Optional output copy steps to run after codon completion: files to copy out from a completed codon, with optional pre-copy commands.",
   ),
+  expectedOutputs: z
+    .array(
+      z.object({
+        path: z
+          .string()
+          .min(1)
+          .describe("Expected output file path (glob pattern or exact path, relative to agent root)"),
+        description: z
+          .string()
+          .optional()
+          .describe("Description of what this output contains"),
+        required: z
+          .boolean()
+          .optional()
+          .default(true)
+          .describe("Whether this output is required for the codon to be considered successful (default: true)"),
+      }),
+    )
+    .optional()
+    .describe(
+      "Structured output declarations. Declares expected outputs from this codon, enabling " +
+        "validation after completion and informing downstream codons about available artifacts. " +
+        "Use for non-programming hanks where outputs aren't obvious from code context.",
+    ),
   sentinels: z
     .array(codonSentinelEntrySchema)
     .optional()
@@ -498,6 +593,23 @@ export const codonObjectSchema = z.object({
     .describe(
       "Max seconds between agent events before the shim aborts (idle timeout). " +
         "Overrides hank-level and runtime defaults. If unset, falls back to hank override, runtime config, or shim default (120s).",
+    ),
+  tools: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "Tool names available to this codon. Used primarily with headless models to configure " +
+        "which tools the LLM can use. Available tools: Read, Write, Edit, Bash, LS, Glob, Grep, " +
+        "WebFetch, WebSearch. If omitted, a default set is used (Read, Write, Edit, Bash, LS, Glob, Grep).",
+    ),
+  maxTokens: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe(
+      "Maximum output tokens per LLM call. Used primarily with headless models. " +
+        "Default: 8192.",
     ),
 });
 
@@ -856,6 +968,14 @@ export const hankOverridesSchema = z
       )
       .optional()
       .describe("Default shim idle timeout for all codons in this hank (seconds)"),
+    shims: z
+      .record(z.string())
+      .optional()
+      .describe(
+        "Custom shim registrations. Maps provider IDs to shim paths or names. " +
+          'Example: { "custom-provider": "./path/to/shim.js" }. ' +
+          "Built-in providers (google, openai, headless) are always available.",
+      ),
   })
   .strict()
   .refine(
@@ -1523,6 +1643,12 @@ export function resolveSettings(options?: {
 
       if (hankFile.overrides) {
         config = deepMerge(config, hankFile.overrides);
+
+        // Register custom shims from hank overrides
+        if (hankFile.overrides.shims) {
+          const shimRegistry = ShimRegistry.getInstance();
+          shimRegistry.registerAll(hankFile.overrides.shims);
+        }
       }
     } catch (_error) {
       // Hank file errors should not prevent config resolution

@@ -1,0 +1,34 @@
+{
+  "id": "validation-gate",
+  "name": "Validation Gate",
+  "description": "Required exit gate that provides a pass/fail determination for the validation phase",
+  "trigger": {
+    "type": "event",
+    "on": ["assistant.action"]
+  },
+  "execution": {
+    "strategy": "immediate"
+  },
+  "model": "anthropic/claude-haiku-4-5",
+  "systemPromptText": "You are a data validation gate. You provide a definitive pass/fail judgment on whether transformed data meets quality standards for release.\n\n## PASS CRITERIA\n\nAll of the following must be true:\n- All source items are accounted for (complete or explicitly excluded with reason)\n- No critical data integrity issues\n- Transformed data matches expected format\n- No evidence of systematic transformation errors\n- Data quality score meets threshold (80+)\n\n## FAIL CRITERIA\n\nAny of the following triggers a fail:\n- Missing data items without explanation\n- Critical integrity violations\n- Systematic transformation errors detected\n- Format non-compliance\n- Data quality score below threshold\n\nBe decisive. When in doubt about borderline cases, fail — it's better to re-process than release bad data.",
+  "userPromptText": "Evaluate these validation events and provide a pass/fail determination.\n\nEvents:\n<%= JSON.stringify(it.events, null, 2) %>\n\nProvide your pass/fail assessment.",
+  "output": {
+    "format": "json",
+    "file": "validation-gate-result.json"
+  },
+  "structuredOutput": {
+    "output": "enum",
+    "enumValues": ["pass", "fail"],
+    "schemaName": "ValidationGateResult",
+    "schemaDescription": "Pass/fail determination for the data validation phase"
+  },
+  "llmParams": {
+    "temperature": 0,
+    "maxOutputTokens": 1024,
+    "maxRetries": 2
+  },
+  "errorHandling": {
+    "maxConsecutiveFailures": 3,
+    "unloadOnFatalError": true
+  }
+}

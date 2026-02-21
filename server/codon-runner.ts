@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -6,6 +7,7 @@ import { ClaudeLogParser } from "./claude-log-parser.js";
 import { TIMEOUTS } from "./config.js";
 import type { ModelInfo } from "./llm/models-dev-schema.js";
 import { ShimProcessManager } from "./shim-process-manager.js";
+import { ShimRegistry } from "./shim-registry.js";
 import {
   extractShimFiles,
   getExtractedShimPath,
@@ -47,26 +49,29 @@ import { getRuntimeCommand, isCompiledExecutable, type Logger } from "./utils.js
  * @throws Error if shims are not available
  */
 async function resolveShimPath(currentFilePath: string, providerId: string): Promise<string> {
-  // Map provider ID to shim name
-  const shimNameMap: Record<string, string> = {
-    google: "gemini",
-    openai: "codex",
-  };
+  const registry = ShimRegistry.getInstance();
 
-  const shimName = shimNameMap[providerId.toLowerCase()];
+  // Check for custom shim path first
+  const customPath = registry.resolveCustomShimPath(providerId, path.dirname(currentFilePath));
+  if (customPath) {
+    return customPath;
+  }
+
+  // Use registry to resolve provider to shim name
+  const shimName = registry.resolve(providerId);
   if (!shimName) {
-    throw new Error(`No shim available for provider: ${providerId}`);
+    throw new Error(`No shim available for provider: ${providerId}. Register a custom shim via overrides.shims in hank.json.`);
   }
 
   // Check if running from compiled executable
   if (isCompiledExecutable()) {
     // Extract shims if needed
-    if (needsShimExtraction(shimName as "gemini" | "codex")) {
+    if (needsShimExtraction(shimName as "gemini" | "codex" | "headless")) {
       await extractShimFiles();
     }
 
     // Return path to extracted shim
-    return getExtractedShimPath(shimName as "gemini" | "codex");
+    return getExtractedShimPath(shimName as "gemini" | "codex" | "headless");
   }
 
   const currentDir = path.dirname(currentFilePath);
@@ -78,9 +83,15 @@ async function resolveShimPath(currentFilePath: string, providerId: string): Pro
 
   if (isRunningFromDist) {
     // Running from dist/index.js -> shims are at dist/shims/
-    return path.resolve(currentDir, `shims/${shimName}/index.js`);
+    const distJsPath = path.resolve(currentDir, `shims/${shimName}/index.js`);
+    if (fs.existsSync(distJsPath)) return distJsPath;
+    // Fallback to .ts for development builds
+    return path.resolve(currentDir, `shims/${shimName}/index.ts`);
   }
   // Running from server/codon-runner.ts -> shims are at ../shims/
+  // Try .ts first (development), then .js (built/bundled)
+  const tsPath = path.resolve(currentDir, `../shims/${shimName}/index.ts`);
+  if (fs.existsSync(tsPath)) return tsPath;
   return path.resolve(currentDir, `../shims/${shimName}/index.js`);
 }
 
@@ -284,7 +295,7 @@ export class CodonRunner extends TypedEventEmitter<CodonRunnerEvents> {
    * @returns true if the model can be executed, false otherwise
    */
   static canRun(model: ModelInfo): boolean {
-    const supportedProviders = ["anthropic", "google", "openai"];
+    const supportedProviders = ["anthropic", "google", "openai", "headless"];
     return supportedProviders.includes(model.providerId.toLowerCase());
   }
 
@@ -440,7 +451,9 @@ export class CodonRunner extends TypedEventEmitter<CodonRunnerEvents> {
     const modelInfo = this.config.codon.model;
 
     // Determine if this is an Anthropic model using providerId
-    const isAnthropicModel = modelInfo.providerId.toLowerCase() === "anthropic";
+    // Headless models always use the ShimProcessManager with the headless shim
+    const isHeadlessModel = modelInfo.providerId.toLowerCase() === "headless";
+    const isAnthropicModel = !isHeadlessModel && modelInfo.providerId.toLowerCase() === "anthropic";
 
     let processManager: ShimProcessManager | ClaudeAgentSDKManager;
 

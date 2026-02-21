@@ -1,0 +1,34 @@
+{
+  "id": "creative-direction-tracker",
+  "name": "Creative Direction Tracker",
+  "description": "Captures the creative brief reference point including theme, constraints, key elements, and tone guidelines for downstream consistency checking",
+  "trigger": {
+    "type": "event",
+    "on": ["assistant.action"]
+  },
+  "execution": {
+    "strategy": "immediate"
+  },
+  "model": "anthropic/claude-haiku-4-5",
+  "systemPromptText": "You are a creative direction analyst. Your job is to extract and structure the key creative parameters being established during the concept phase. This creates a reference point that downstream phases can check against for consistency.\n\n## WHAT TO EXTRACT\n\n### Theme\n- Central concept or idea\n- Thematic keywords\n- Metaphors or motifs being established\n\n### Constraints\n- Format requirements (length, structure)\n- Tone requirements (formal, casual, playful, serious)\n- Content requirements (topics to cover, elements to include)\n- Things to avoid\n\n### Key Elements\n- Core messages or arguments\n- Required sections or components\n- Specific references or allusions planned\n- Unique hooks or angles\n\n### Tone Guidelines\n- Voice characteristics (authoritative, conversational, etc.)\n- Emotional register (inspiring, informative, provocative, etc.)\n- Stylistic preferences (simple, elaborate, technical, accessible)\n- Audience-specific adjustments\n\nCapture these with enough detail that a different model could verify alignment.",
+  "userPromptText": "Extract creative direction parameters from these concept development events.\n\nEvents:\n<%= JSON.stringify(it.events, null, 2) %>\n\nReturn the structured creative direction snapshot.",
+  "output": {
+    "format": "json",
+    "file": "creative-direction-snapshot.json"
+  },
+  "structuredOutput": {
+    "output": "object",
+    "schemaStr": "{\"type\":\"object\",\"properties\":{\"theme\":{\"type\":\"string\",\"description\":\"Central theme or concept\"},\"thematicKeywords\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"Key thematic words\"},\"constraints\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"type\":{\"type\":\"string\"},\"description\":{\"type\":\"string\"}},\"required\":[\"type\",\"description\"]},\"description\":\"Creative and technical constraints\"},\"keyElements\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"Must-include elements\"},\"toneGuidelines\":{\"type\":\"object\",\"properties\":{\"voice\":{\"type\":\"string\"},\"emotionalRegister\":{\"type\":\"string\"},\"style\":{\"type\":\"string\"},\"audienceNotes\":{\"type\":\"string\"}},\"description\":\"Tone and voice guidelines\"}},\"required\":[\"theme\",\"keyElements\",\"toneGuidelines\"]}",
+    "schemaName": "CreativeDirectionSnapshot",
+    "schemaDescription": "Structured snapshot of creative direction parameters for downstream consistency checking"
+  },
+  "llmParams": {
+    "temperature": 0,
+    "maxOutputTokens": 4096,
+    "maxRetries": 2
+  },
+  "errorHandling": {
+    "maxConsecutiveFailures": 3,
+    "unloadOnFatalError": false
+  }
+}

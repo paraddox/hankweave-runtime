@@ -299,6 +299,12 @@ export class ClaudeAgentSDKManager extends TypedEventEmitter<ProcessEvents> {
     // Initialize env object (SDK doesn't inherit all process.env, only what we explicitly pass)
     if (!options.env) options.env = {};
 
+    // Prevent nested session detection when hankweave is invoked from within Claude Code.
+    // The Claude Code binary checks CLAUDECODE env var and refuses to start if set.
+    // Delete it from process.env so it doesn't leak into child processes via any code path.
+    delete process.env.CLAUDECODE;
+    delete process.env.CLAUDE_CODE_ENTRYPOINT;
+
     // Pass through essential system environment variables that Claude Code SDK needs
     const essentialVars = [
       "PATH",
@@ -323,7 +329,8 @@ export class ClaudeAgentSDKManager extends TypedEventEmitter<ProcessEvents> {
 
     for (const key in process.env) {
       // Pass through CLAUDE_CODE_* variables (OAuth authentication, etc.)
-      if (key.startsWith("CLAUDE_CODE_")) {
+      // Skip CLAUDE_CODE_ENTRYPOINT as it can interfere with SDK-spawned processes.
+      if (key.startsWith("CLAUDE_CODE_") && key !== "CLAUDE_CODE_ENTRYPOINT") {
         options.env[key] = process.env[key];
         this.logger.log(`Passing through Claude Code env var: ${key}`);
       }

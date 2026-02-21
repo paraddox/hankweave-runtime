@@ -1,4 +1,9 @@
 #!/usr/bin/env bun
+// Prevent nested session detection when hankweave is invoked from within Claude Code.
+// Must happen before any imports that might snapshot process.env.
+delete process.env.CLAUDECODE;
+delete process.env.CLAUDE_CODE_ENTRYPOINT;
+
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -102,6 +107,57 @@ async function readStdin(): Promise<string> {
  * to persist across runs. If the file already exists, we reuse it (preserving mtime)
  * which keeps the data hash stable.
  */
+/**
+ * Download a URL data source to a stable local directory.
+ * Uses content hashing for cache stability across runs.
+ * Supports direct file downloads and .zip archives.
+ */
+async function downloadUrlDataSource(url: string): Promise<string> {
+  const urlHash = crypto.createHash("sha256").update(url).digest("hex").slice(0, 16);
+  const cacheDir = path.join(os.homedir(), ".hankweave-cache", "url-data");
+  const downloadDir = path.join(cacheDir, `url-${urlHash}`);
+
+  // If already downloaded, return existing path
+  if (fs.existsSync(downloadDir)) {
+    return downloadDir;
+  }
+
+  await fs.promises.mkdir(downloadDir, { recursive: true });
+
+  try {
+    const response = await fetch(url, {
+      headers: { "User-Agent": "Hankweave/1.0" },
+      signal: AbortSignal.timeout(60000),
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    const contentType = response.headers.get("content-type") || "";
+    const content = Buffer.from(await response.arrayBuffer());
+
+    if (url.endsWith(".zip") || contentType.includes("application/zip")) {
+      // Write zip file and extract
+      const zipPath = path.join(downloadDir, "download.zip");
+      await fs.promises.writeFile(zipPath, content);
+      const { execSync } = await import("node:child_process");
+      execSync(`unzip -o "${zipPath}" -d "${downloadDir}"`, { encoding: "utf-8" });
+      await fs.promises.unlink(zipPath);
+    } else {
+      // Write content directly
+      const filename = path.basename(new URL(url).pathname) || "data.txt";
+      await fs.promises.writeFile(path.join(downloadDir, filename), content);
+    }
+
+    return downloadDir;
+  } catch (error) {
+    // Clean up on failure
+    await fs.promises.rm(downloadDir, { recursive: true, force: true }).catch(() => {});
+    throw error;
+  }
+}
+
 async function getStableInputPath(content: string, type: "input" | "stdin"): Promise<string> {
   const contentHash = crypto.createHash("sha256").update(content).digest("hex").slice(0, 16);
   const cacheDir = path.join(os.homedir(), ".hankweave-cache", "inputs");
@@ -348,6 +404,16 @@ Use --output to copy them elsewhere.
       console.log(`> Using stdin input (${stdinContent.length} chars)`);
     } catch (error) {
       console.error(`Error: ${(error as Error).message}`);
+      process.exit(1);
+    }
+  } else if (dataSourcePath && (dataSourcePath.startsWith("http://") || dataSourcePath.startsWith("https://"))) {
+    // URL data source - download to stable temp directory
+    try {
+      resolvedDataPath = await downloadUrlDataSource(dataSourcePath);
+      inputSourceType = "path";
+      console.log(`> Downloaded data from URL: ${dataSourcePath}`);
+    } catch (error) {
+      console.error(`Error downloading URL data source: ${(error as Error).message}`);
       process.exit(1);
     }
   } else {

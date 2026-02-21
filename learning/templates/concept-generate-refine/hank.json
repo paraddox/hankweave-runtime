@@ -1,0 +1,90 @@
+{
+  "$schema": "https://unpkg.com/hankweave@latest/schemas/hank.schema.json",
+  "meta": {
+    "name": "Concept-Generate-Refine",
+    "version": "1.0.0",
+    "description": "Creative content pipeline that develops concepts, generates initial content, then iteratively critiques and refines through cross-model review. Features creative direction tracking and diminishing returns detection.",
+    "author": "Hankweave Templates"
+  },
+  "hank": [
+    {
+      "id": "concept",
+      "name": "Concept: Develop the creative direction",
+      "description": "Explore the creative brief and establish the conceptual foundation, themes, and direction",
+      "model": "headless:anthropic/claude-opus-4-6",
+      "continuationMode": "fresh",
+      "promptFile": "./prompts/1-concept.md",
+      "tools": ["Read", "Write", "WebFetch"],
+      "sentinels": [
+        {
+          "sentinelConfig": "./sentinels/creative-direction-tracker.json",
+          "settings": {
+            "failCodonIfNotLoaded": false
+          }
+        }
+      ],
+      "rigSetup": [
+        {
+          "type": "command",
+          "command": { "run": "mkdir -p concept content critiques output" }
+        }
+      ],
+      "checkpointedFiles": ["concept/**/*"]
+    },
+    {
+      "id": "generate",
+      "name": "Generate: Create the initial content",
+      "description": "Produce the first complete version of the content based on the concept",
+      "model": "headless:anthropic/claude-sonnet-4-6",
+      "continuationMode": "fresh",
+      "promptFile": "./prompts/2-generate.md",
+      "tools": ["Read", "Write"],
+      "checkpointedFiles": ["content/**/*"]
+    },
+    {
+      "type": "loop",
+      "id": "critique-refine-loop",
+      "name": "Critique-Refine: Iterative quality improvement",
+      "terminateOn": { "type": "iterationLimit", "limit": 4 },
+      "codons": [
+        {
+          "id": "critique",
+          "name": "Critique: Cross-model creative assessment",
+          "description": "Independent critique from a different model for diverse perspective",
+          "model": "headless:google/gemini-2.5-pro",
+          "continuationMode": "fresh",
+          "promptFile": "./prompts/3-critique.md",
+          "tools": ["Read", "Write"],
+          "sentinels": [
+            {
+              "sentinelConfig": "./sentinels/diminishing-returns-detector.json",
+              "settings": {
+                "failCodonIfNotLoaded": false
+              }
+            }
+          ]
+        },
+        {
+          "id": "refine",
+          "name": "Refine: Incorporate critique feedback",
+          "description": "Apply critique feedback to improve the content",
+          "model": "headless:anthropic/claude-sonnet-4-6",
+          "continuationMode": "continue-previous",
+          "promptFile": "./prompts/4-refine.md",
+          "tools": ["Read", "Write", "Edit"],
+          "checkpointedFiles": ["content/**/*"]
+        }
+      ]
+    },
+    {
+      "id": "format",
+      "name": "Format: Final output formatting",
+      "description": "Apply final formatting, structure, and presentation to the refined content",
+      "model": "headless:anthropic/claude-sonnet-4-6",
+      "continuationMode": "fresh",
+      "promptFile": "./prompts/5-format.md",
+      "tools": ["Read", "Write"],
+      "checkpointedFiles": ["output/**/*"]
+    }
+  ]
+}

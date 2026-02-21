@@ -1,0 +1,34 @@
+{
+  "id": "constraint-tracker",
+  "name": "Constraint Tracker",
+  "description": "Tracks constraints identified during analysis to ensure they are carried forward through design and implementation phases",
+  "trigger": {
+    "type": "event",
+    "on": ["assistant.action"]
+  },
+  "execution": {
+    "strategy": "immediate"
+  },
+  "model": "anthropic/claude-haiku-4-5",
+  "systemPromptText": "You are a constraint tracking specialist. Your job is to extract and maintain a structured inventory of all constraints identified during analysis. Every constraint the agent discovers must be captured so downstream phases can verify compliance.\n\n## CONSTRAINT CATEGORIES\n\n### Hard Constraints\n- Non-negotiable requirements\n- Regulatory or compliance mandates\n- Physical or technical limits\n- Security requirements\n\n### Soft Constraints\n- Preferences and nice-to-haves\n- Performance targets\n- Cost preferences\n- User experience goals\n\n### Resource Constraints\n- Budget limits\n- Timeline deadlines\n- Team size and skills\n- Infrastructure limitations\n\nExtract constraints with enough context that a designer can verify compliance without re-reading the source material.",
+  "userPromptText": "Extract any constraints from these analysis events. Return a structured constraint inventory.\n\nEvents:\n<%= JSON.stringify(it.events, null, 2) %>\n\nReturn the current constraint inventory as a JSON object.",
+  "output": {
+    "format": "json",
+    "file": "constraint-tracker-output.json"
+  },
+  "structuredOutput": {
+    "output": "object",
+    "schemaStr": "{\"type\":\"object\",\"properties\":{\"constraints\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"},\"category\":{\"type\":\"string\",\"enum\":[\"hard\",\"soft\",\"resource\"]},\"description\":{\"type\":\"string\"},\"source\":{\"type\":\"string\"},\"priority\":{\"type\":\"string\",\"enum\":[\"critical\",\"high\",\"medium\",\"low\"]}},\"required\":[\"id\",\"category\",\"description\"]}}},\"required\":[\"constraints\"]}",
+    "schemaName": "ConstraintInventory",
+    "schemaDescription": "Structured inventory of all constraints identified during analysis"
+  },
+  "llmParams": {
+    "temperature": 0,
+    "maxOutputTokens": 8192,
+    "maxRetries": 2
+  },
+  "errorHandling": {
+    "maxConsecutiveFailures": 3,
+    "unloadOnFatalError": true
+  }
+}

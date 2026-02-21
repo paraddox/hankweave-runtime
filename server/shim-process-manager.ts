@@ -219,9 +219,21 @@ export class ShimProcessManager extends TypedEventEmitter<ProcessEvents> {
   ): string[] {
     // Model override is already applied in loadCodonSequence(), so just use codon.model
     const modelInfo = codon.model;
+    const isHeadless = modelInfo.providerId.toLowerCase() === "headless";
+    // For headless models, modelId is "provider/model" (compound format)
     const modelId = modelInfo.modelId;
 
     const args = ["--model", modelId, "-p"];
+
+    // For headless shim, pass tools and max tokens if configured
+    if (isHeadless) {
+      if (codon.tools && codon.tools.length > 0) {
+        args.push("--tools", codon.tools.join(","));
+      }
+      if (codon.maxTokens) {
+        args.push("--max-tokens", String(codon.maxTokens));
+      }
+    }
 
     // Resume session if:
     // 1. We're in extension mode (exhaustion), OR

@@ -35,7 +35,7 @@ Hankweave takes care of long-running executions, while:
 - **Sentinels** monitor the event stream in real time to catch drift, laziness, and convention violations - functioning as error detectors, narrators, and real-time evals while keeping the core agent focused.
 - **Looping** sequences repeat complex tasks, trading compute for reliability using Agentic Dynamic Programming.
 - **Harness abstraction** lets hanks run on Claude Code, Codex, Gemini CLI, or any agent that exposes the right capabilities. Test in your preferred coding agent, then freeze and ship. Swap harnesses seamlessly, or build new ones using [Clausetta](./learning/examples/clausetta/), our hank for auto-generating shims.
-- **Rigs** provide deterministic code loading and workspace setup, so the same codon runs the same way every time.
+- **Rigs** provide deterministic code loading and workspace setup, so the same codon runs the same way every time. Rigs support file copying, shell commands, URL fetching, template rendering, and pre-execution validation.
 - **Checkpointing and rollbacks** create git snapshots at every codon boundary. When something fails, roll back to any point and try a different approach.
 - **Structured event journal** traces every tool call and decision back to its source, making it possible to pinpoint where a 20-hour run went wrong.
 - **File-based prompts** with template variables, comments and frontmatter make prompts self-documenting and navigable - by humans editing them and agents reading them.
@@ -83,10 +83,10 @@ The Hankweave runtime is a **server** that orchestrates agent harnesses - Claude
    EVENTS (WebSocket)                                                     ORCHESTRATES
           │                                                                       │
           ▼                                                                       ▼
-┌─────────────────────────┐             ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐
-│       CONSUMERS         │             │ Claude  │ │ Gemini  │ │  Codex  │ │  Cline  │
-│                         │             │ Code    │ │ CLI     │ │         │ │         │
-│  Basic CLI (included)   │             └────┬────┘ └────┬────┘ └────┬────┘ └─────┬───┘
+┌─────────────────────────┐             ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌──────────┐
+│       CONSUMERS         │             │ Claude  │ │ Gemini  │ │  Codex  │ │ Headless │
+│                         │             │ Code    │ │ CLI     │ │         │ │ LLM      │
+│  Basic CLI (included)   │             └────┬────┘ └────┬────┘ └────┬────┘ └─────┬────┘
 │  Data pipelines         │                  │           │           │            │
 │  CI systems             │                  └───────────┴───────────┴────────────┘
 │  Custom UIs             │                                    │
@@ -259,7 +259,7 @@ Hankweave includes per-codon [cost and token tracking](https://hankweave.southbr
 <details>
 <summary><strong>What models and harnesses are supported?</strong></summary>
 
-Claude Agent SDK is packaged in by default. Using the polymorphic connector pattern with shims, we support several other agents (Gemini CLI, etc.). But the real answer is: you can build new ones easily. If an agent exposes the required capabilities, you can run the polymorphic hank, plug in information about the agent you want supported, and Hankweave - using a hank - will build a shim to connect it. Hankweave building its own harness adapters is one of our favorite examples of hanks in action.
+Claude Agent SDK is packaged in by default. Using the polymorphic connector pattern with shims, we support several other agents (Gemini CLI, Codex, etc.). The **headless LLM shim** enables direct API access to any supported provider (Anthropic, OpenAI, Google, Groq) with configurable tool sets - no coding agent needed. This is the key enabler for non-programming hanks: research workflows, content pipelines, data processing, and more. You can also register custom shims via `overrides.shims` in your hank for any other agent that exposes the required capabilities.
 
 </details>
 

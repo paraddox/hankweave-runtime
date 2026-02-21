@@ -1,0 +1,102 @@
+{
+  "$schema": "https://unpkg.com/hankweave@latest/schemas/hank.schema.json",
+  "meta": {
+    "name": "Analyze-Design-Detail",
+    "version": "1.0.0",
+    "description": "Iterative analysis-to-specification pipeline for complex design problems. Features constraint tracking, consistency checking, and cost validation before finalization.",
+    "author": "Hankweave Templates"
+  },
+  "hank": [
+    {
+      "id": "analyze",
+      "name": "Analyze: Deep examination of requirements and constraints",
+      "description": "Exhaustive analysis of the problem space, extracting all constraints and requirements",
+      "model": "headless:anthropic/claude-opus-4-6",
+      "continuationMode": "fresh",
+      "promptFile": "./prompts/1-analyze.md",
+      "tools": ["Read", "Write", "Glob", "Grep"],
+      "exhaustWithPrompt": "Continue your analysis. Look for constraints, requirements, or edge cases you may have missed. Update your analysis documents accordingly.",
+      "sentinels": [
+        {
+          "sentinelConfig": "./sentinels/constraint-tracker.json",
+          "settings": {
+            "failCodonIfNotLoaded": true
+          }
+        }
+      ],
+      "rigSetup": [
+        {
+          "type": "command",
+          "command": { "run": "mkdir -p analysis design details cost-report output" }
+        }
+      ],
+      "checkpointedFiles": ["analysis/**/*"]
+    },
+    {
+      "type": "loop",
+      "id": "design-detail-loop",
+      "name": "Design-Detail: Iterative design refinement",
+      "terminateOn": { "type": "iterationLimit", "limit": 3 },
+      "codons": [
+        {
+          "id": "design",
+          "name": "Design: Create or refine the high-level design",
+          "description": "Propose or refine the design solution based on analysis and constraints",
+          "model": "headless:anthropic/claude-opus-4-6",
+          "continuationMode": "fresh",
+          "promptFile": "./prompts/2-design.md",
+          "tools": ["Read", "Write"],
+          "sentinels": [
+            {
+              "sentinelConfig": "./sentinels/consistency-checker.json",
+              "settings": {
+                "failCodonIfNotLoaded": false
+              }
+            }
+          ],
+          "checkpointedFiles": ["design/**/*"]
+        },
+        {
+          "id": "detail",
+          "name": "Detail: Flesh out implementation specifics",
+          "description": "Add implementation details, specifications, and edge case handling",
+          "model": "headless:anthropic/claude-sonnet-4-6",
+          "continuationMode": "continue-previous",
+          "promptFile": "./prompts/3-detail.md",
+          "tools": ["Read", "Write", "Edit"],
+          "archiveOnSuccess": ["design/previous-iteration"],
+          "checkpointedFiles": ["details/**/*"]
+        }
+      ]
+    },
+    {
+      "id": "cost-validate",
+      "name": "Cost-Validate: Verify feasibility and resource requirements",
+      "description": "Validate the design against cost, resource, and feasibility constraints",
+      "model": "headless:anthropic/claude-sonnet-4-6",
+      "continuationMode": "fresh",
+      "promptFile": "./prompts/4-cost-validate.md",
+      "tools": ["Read", "Write"],
+      "rigSetup": [
+        {
+          "type": "validate",
+          "validate": {
+            "command": "test -f design/design-spec.md",
+            "message": "Design specification not found — design phase may not have completed successfully"
+          }
+        }
+      ],
+      "checkpointedFiles": ["cost-report/**/*"]
+    },
+    {
+      "id": "finalize",
+      "name": "Finalize: Produce the complete specification",
+      "description": "Assemble all components into a final, cohesive specification document",
+      "model": "headless:anthropic/claude-sonnet-4-6",
+      "continuationMode": "fresh",
+      "promptFile": "./prompts/5-finalize.md",
+      "tools": ["Read", "Write"],
+      "checkpointedFiles": ["output/**/*"]
+    }
+  ]
+}

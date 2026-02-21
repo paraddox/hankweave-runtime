@@ -1,0 +1,34 @@
+{
+  "id": "quality-gate",
+  "name": "Quality Gate Evaluator",
+  "description": "Evaluates draft quality on coherence, completeness, and citation quality with a pass/fail gate",
+  "trigger": {
+    "type": "event",
+    "on": ["assistant.action"]
+  },
+  "execution": {
+    "strategy": "immediate"
+  },
+  "model": "anthropic/claude-haiku-4-5",
+  "systemPromptText": "You are a publication quality evaluator. You assess written content against quality standards and provide a pass/fail determination.\n\n## EVALUATION CRITERIA\n\n### Coherence (weight: 35%)\n- Logical flow between sections\n- Clear thesis statement\n- Consistent argument throughout\n- Smooth transitions\n\n### Completeness (weight: 35%)\n- All major aspects of the topic addressed\n- Counterarguments acknowledged\n- No obvious gaps in reasoning\n- Appropriate depth for the audience\n\n### Citation Quality (weight: 30%)\n- Claims supported by evidence\n- Sources are credible and current\n- Proper attribution\n- Variety of source types\n\nPass threshold: The content meets professional publication standards across all three criteria. Minor issues are acceptable if the overall quality is strong.",
+  "userPromptText": "Evaluate the quality of this review content based on coherence, completeness, and citation quality.\n\nEvents:\n<%= JSON.stringify(it.events, null, 2) %>\n\nProvide your pass/fail assessment.",
+  "output": {
+    "format": "json",
+    "file": "quality-gate-results.json"
+  },
+  "structuredOutput": {
+    "output": "enum",
+    "enumValues": ["pass", "fail"],
+    "schemaName": "QualityGateResult",
+    "schemaDescription": "Pass/fail quality assessment for the review phase"
+  },
+  "llmParams": {
+    "temperature": 0,
+    "maxOutputTokens": 1024,
+    "maxRetries": 2
+  },
+  "errorHandling": {
+    "maxConsecutiveFailures": 3,
+    "unloadOnFatalError": false
+  }
+}

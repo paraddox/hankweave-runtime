@@ -87,7 +87,7 @@ A **hank** is a sequence of codons (blocks of agentic work). A **codon** is a si
 }
 ```
 
-When this runs, Hankweave creates an isolated execution environment, spawns the agent harness (Claude Code, Gemini CLI, etc.), tracks the specified files, and checkpoints the result when complete. The behavior is captured, not emergent.
+When this runs, Hankweave creates an isolated execution environment, spawns the agent harness (Claude Code, Gemini CLI, Codex, or the headless LLM shim), tracks the specified files, and checkpoints the result when complete. The behavior is captured, not emergent.
 
 Because codons run through standard agent harnesses, developing them is straightforward: get something working in Claude Code or Codex (or whatever agent is popular the week you're reading this), then capture that working state into a codon that you can share, version control, reuse and maintain.
 
@@ -147,7 +147,10 @@ Codons can fail when the environment isn't set up correctly. Rigs fix that.
 │                                                     │
 │  RIG (runs before agent)                            │
 │  ├── copy typescript-template/ → workspace          │
-│  └── bun install                                    │
+│  ├── fetch dataset from URL → data/                 │
+│  ├── template config.eta → config.json              │
+│  ├── validate: bun run typecheck                    │
+│  └── command: bun install                           │
 │                                                     │
 │  PROMPT                                             │
 │  "Create Zod schemas for the data..."               │
@@ -157,6 +160,13 @@ Codons can fail when the environment isn't set up correctly. Rigs fix that.
 │                                                     │
 └─────────────────────────────────────────────────────┘
 ```
+
+Rigs support five operation types:
+- **copy** — Copy files/directories into the workspace
+- **command** — Run shell commands (e.g., `bun install`)
+- **fetch** — Download files from URLs with optional headers and timeout
+- **template** — Render Eta templates with variables to produce dynamic configuration or prompts
+- **validate** — Run a validation command that aborts the codon if it fails (e.g., check API keys, verify input files)
 
 The rig handles the reproducible parts; the agent handles the parts that need intelligence. (i.e. Don't use an LLM to do things code can do.)
 

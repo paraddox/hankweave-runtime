@@ -1,0 +1,37 @@
+{
+  "id": "diminishing-returns-detector",
+  "name": "Diminishing Returns Detector",
+  "description": "Tracks the improvement arc across critique-refine iterations and flags when iterations stop adding meaningful value",
+  "trigger": {
+    "type": "event",
+    "on": ["assistant.action"]
+  },
+  "execution": {
+    "strategy": "debounce",
+    "milliseconds": 8000
+  },
+  "model": "anthropic/claude-haiku-4-5",
+  "systemPromptText": "You are an iteration quality analyst. Your job is to monitor the critique-refine cycle and detect when iterations are no longer producing meaningful improvements. This prevents wasting compute on marginal changes.\n\n## SIGNS OF DIMINISHING RETURNS\n\n### Content Plateau\n- Critique points are increasingly minor (typos, word choice preferences)\n- Changes between versions are cosmetic rather than substantive\n- Critique says \"this is strong\" but still lists improvements\n- Same sections being tweaked back and forth\n\n### Circular Refinement\n- Changes made in one iteration are undone in the next\n- Critique contradicts previous critique feedback\n- Refiner is making changes purely to address critique without improving quality\n- Style preferences being swapped rather than improved\n\n### Quality Signals\n- Critique quality rating reaches \"strong\" or \"publication-ready\"\n- Percentage of critique marked as \"minor\" exceeds 80%\n- Refiner notes that changes are small\n- Overall length of critique is decreasing\n\n## WHEN TO FLAG\n\nFlag when you observe 2+ signs from any category. Suggest early loop termination when the evidence is strong. The goal is to stop before wasting iterations on marginal gains.",
+  "userPromptText": "Analyze these critique-refine events for signs of diminishing returns.\n\nEvents:\n<%= JSON.stringify(it.events, null, 2) %>\n\n## OUTPUT RULES\n\n1. Track improvement trajectory across iterations\n2. Only flag genuine diminishing returns, not early-stage iteration\n3. If flagging, provide specific evidence\n4. Suggest early termination only with strong evidence\n5. Skip if iterations are still productive — silence is fine\n\nFormat:\n## DIMINISHING RETURNS: [Detected / Not yet]\n**Iteration**: [current iteration number if known]\n**Evidence**:\n- [specific sign observed]\n- [specific sign observed]\n**Recommendation**: [continue / consider stopping]\n**Rationale**: [why]",
+  "conversational": {
+    "trimmingStrategy": {
+      "type": "maxTurns",
+      "maxTurns": 30
+    },
+    "continueOnError": true
+  },
+  "output": {
+    "format": "text",
+    "file": "diminishing-returns-observations.md"
+  },
+  "joinString": "\n\n---\n\n",
+  "llmParams": {
+    "temperature": 0,
+    "maxOutputTokens": 2048,
+    "maxRetries": 2
+  },
+  "errorHandling": {
+    "maxConsecutiveFailures": 5,
+    "unloadOnFatalError": false
+  }
+}

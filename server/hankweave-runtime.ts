@@ -1665,7 +1665,13 @@ export class HankweaveRuntime extends TypedEventEmitter<ServerInternalEvents> {
             ? `${item.copy.from} → ${item.copy.to}`
             : item.type === "command" && item.command
               ? `'${item.command.run}'`
-              : "unknown";
+              : item.type === "fetch" && item.fetch
+                ? `${item.fetch.url} → ${item.fetch.to}`
+                : item.type === "template" && item.template
+                  ? `${item.template.from} → ${item.template.to}`
+                  : item.type === "validate" && item.validate
+                    ? `'${item.validate.command}'`
+                    : "unknown";
 
         // Emit operation start info event
         // MESSAGE FORMAT CONTRACT: TUI uses string matching on "Rig operation"
@@ -1704,6 +1710,46 @@ export class HankweaveRuntime extends TypedEventEmitter<ServerInternalEvents> {
                 ? lastCopiedPath
                 : this.config.agentRootPath;
             this.logger.log(`Ran command in ${resolvedWorkingDir}: ${item.command.run}`);
+          } else if (item.type === "fetch" && item.fetch) {
+            const targetPath = path.join(this.config.agentRootPath, item.fetch.to);
+            this.logger.log(`Fetching ${item.fetch.url} to ${targetPath}`);
+            const response = await fetch(item.fetch.url, {
+              headers: item.fetch.headers || {},
+              signal: AbortSignal.timeout(item.fetch.timeout || 30000),
+            });
+            if (!response.ok) {
+              throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            const content = await response.arrayBuffer();
+            await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
+            await fs.promises.writeFile(targetPath, Buffer.from(content));
+            this.logger.log(`Fetched ${item.fetch.url} to ${targetPath} (${content.byteLength} bytes)`);
+          } else if (item.type === "template" && item.template) {
+            const targetPath = path.join(this.config.agentRootPath, item.template.to);
+            this.logger.log(`Rendering template ${item.template.from} to ${targetPath}`);
+            const { Eta } = await import("eta");
+            const eta = new Eta({ autoEscape: false });
+            const templateContent = await fs.promises.readFile(item.template.from, "utf-8");
+            const rendered = eta.renderString(templateContent, item.template.variables || {});
+            await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
+            await fs.promises.writeFile(targetPath, rendered, "utf-8");
+            this.logger.log(`Rendered template to ${targetPath}`);
+          } else if (item.type === "validate" && item.validate) {
+            this.logger.log(`Running validation: ${item.validate.command}`);
+            const { execSync } = await import("node:child_process");
+            try {
+              execSync(item.validate.command, {
+                cwd: this.config.agentRootPath,
+                timeout: 30000,
+                encoding: "utf-8",
+                stdio: ["pipe", "pipe", "pipe"],
+                env: { ...process.env, ...(codon.env || {}) },
+              });
+              this.logger.log(`Validation passed: ${item.validate.command}`);
+            } catch (validationError) {
+              const customMsg = item.validate.message || `Validation failed: ${item.validate.command}`;
+              throw new Error(customMsg);
+            }
           }
           // Operation succeeded
           rigSetupCompletedCount++;
@@ -6051,7 +6097,7 @@ export class HankweaveRuntime extends TypedEventEmitter<ServerInternalEvents> {
 
   private classifyRigSetupFailureType(
     error: unknown,
-    operationType: "copy" | "command",
+    operationType: "copy" | "command" | "fetch" | "template" | "validate",
   ): "command_failed" | "timeout" | "other" {
     const errorText = toError(error).message.toLowerCase();
     const stderrText =
@@ -6071,7 +6117,7 @@ export class HankweaveRuntime extends TypedEventEmitter<ServerInternalEvents> {
       return "timeout";
     }
 
-    if (error instanceof CommandError || operationType === "command") {
+    if (error instanceof CommandError || operationType === "command" || operationType === "validate") {
       return "command_failed";
     }
 

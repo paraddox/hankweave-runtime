@@ -87,6 +87,39 @@ async function build() {
 
   if (existsSync(shimsSource)) {
     await cp(shimsSource, shimsTarget, { recursive: true });
+
+    // Bundle TypeScript shims (e.g., headless) into standalone JS files
+    const headlessTs = join(shimsTarget, "headless", "index.ts");
+    if (existsSync(headlessTs)) {
+      console.log("📦 Bundling headless shim...");
+      const headlessResult = await Bun.build({
+        entrypoints: [headlessTs],
+        outdir: join(shimsTarget, "headless"),
+        target: "node",
+        format: "esm",
+        minify: true,
+        splitting: false,
+        external: [
+          "ai",
+          "@ai-sdk/anthropic",
+          "@ai-sdk/google",
+          "@ai-sdk/groq",
+          "@ai-sdk/openai",
+        ],
+      });
+      if (headlessResult.success) {
+        // Remove the source .ts file, keep only the bundled .js
+        const { rm: rmFile } = await import("node:fs/promises");
+        await rmFile(headlessTs, { force: true });
+        console.log("✅ Headless shim bundled successfully");
+      } else {
+        console.warn("⚠️  Warning: headless shim bundling failed");
+        for (const log of headlessResult.logs) {
+          console.error(log);
+        }
+      }
+    }
+
     console.log(`✅ Copied shims to ${shimsTarget}`);
   } else {
     console.warn("⚠️  Warning: shims directory not found at", shimsSource);

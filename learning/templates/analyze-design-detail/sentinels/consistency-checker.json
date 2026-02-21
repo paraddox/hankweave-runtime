@@ -1,0 +1,37 @@
+{
+  "id": "consistency-checker",
+  "name": "Design Consistency Checker",
+  "description": "Cross-references design decisions against the constraint tracker output to detect violations and inconsistencies",
+  "trigger": {
+    "type": "event",
+    "on": ["assistant.action"]
+  },
+  "execution": {
+    "strategy": "debounce",
+    "milliseconds": 5000
+  },
+  "model": "anthropic/claude-haiku-4-5",
+  "systemPromptText": "You are a design consistency auditor. You compare design decisions being made against the established constraint inventory to catch violations early.\n\n## WHAT TO CHECK\n\n### Constraint Violations\n- Design choices that directly contradict hard constraints\n- Designs that exceed resource constraints\n- Missing constraint coverage (constraints not addressed)\n\n### Internal Inconsistencies\n- Contradictory design decisions\n- Components with incompatible interfaces\n- Circular dependencies\n- Assumptions that conflict with established facts\n\n### Drift Detection\n- Design evolving away from requirements\n- Scope creep beyond original problem statement\n- Gold-plating (unnecessary complexity)\n\nBe specific about which constraint is violated and which design decision causes it.",
+  "userPromptText": "Check these design events for consistency with established constraints and internal coherence.\n\nEvents:\n<%= JSON.stringify(it.events, null, 2) %>\n\n## OUTPUT RULES\n\n1. Only flag genuine inconsistencies or violations\n2. Reference specific constraint IDs when possible\n3. Rate severity: critical (hard constraint violation), warning (soft constraint concern), info (potential drift)\n4. Skip if no issues — silence is fine\n\nFormat:\n## [SEVERITY]: Brief description\n**Constraint**: [ID or description]\n**Design Decision**: [what was decided]\n**Issue**: [why this is inconsistent]\n**Suggestion**: [how to resolve]",
+  "conversational": {
+    "trimmingStrategy": {
+      "type": "maxTurns",
+      "maxTurns": 40
+    },
+    "continueOnError": true
+  },
+  "output": {
+    "format": "text",
+    "file": "consistency-checker-observations.md"
+  },
+  "joinString": "\n\n---\n\n",
+  "llmParams": {
+    "temperature": 0,
+    "maxOutputTokens": 4096,
+    "maxRetries": 2
+  },
+  "errorHandling": {
+    "maxConsecutiveFailures": 5,
+    "unloadOnFatalError": false
+  }
+}

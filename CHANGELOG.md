@@ -8,13 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- 
+- **Headless LLM shim** — Direct LLM API wrapper with configurable tool sets, enabling non-programming hanks (research, content pipelines, data processing, etc.). Use `headless:provider/model` syntax in codon model fields. Supports Anthropic, OpenAI, Google, and Groq providers.
+- **Tool registry system** — Codons can declare which tools they need via the `tools` field. Supports individual tool names and tool pack references (`@filesystem`, `@web-research`, `@data-analysis`, `@document`, `@all`, `@minimal`, `@research`, `@creative`).
+- **Shim plugin registry** — Extensible shim resolution replacing hardcoded provider-to-shim mapping. Register custom shims via `overrides.shims` in hank files for third-party or custom agent harnesses.
+- **New rig types** — `fetch` (download files from URLs), `template` (render Eta templates with variables), and `validate` (pre-execution validation commands) complement existing `copy` and `command` rig types.
+- **URL data sources** — Pass HTTP/HTTPS URLs as the data source argument. Hankweave downloads and caches the content automatically, with support for zip extraction.
+- **Codon `maxTokens` field** — Configure max output tokens per LLM call for headless codons.
+- **Codon `expectedOutputs` field** — Declare expected output files with descriptions and required flags for downstream validation.
+- **Four template family hanks** — Reusable structural archetypes for non-programming hanks under `learning/templates/`:
+  - **Research-to-Publication** — Multi-phase research → synthesis → draft → review/revise loop → polish pipeline with bias detection and quality gate sentinels.
+  - **Analyze-Design-Detail** — Iterative analysis → design/detail loop → cost validation → finalization pipeline with constraint tracking and consistency checking sentinels.
+  - **Ingest-Transform-Validate** — Data processing pipeline with integrity monitoring, transformation fidelity tracking, and required validation gate. Features retry and abort error handling.
+  - **Concept-Generate-Refine** — Creative content pipeline with concept development → generation → critique/refine loop → formatting. Includes creative direction tracking and diminishing returns detection.
 
 ### Changed
-- 
+- Shim path resolution now uses the ShimRegistry singleton instead of hardcoded mapping, making it extensible for custom providers.
+- Build script now bundles the headless TypeScript shim to standalone JS during distribution builds.
 
 ### Fixed
-- 
+-
 
 ## [0.5.4] - 2026-02-20
 
