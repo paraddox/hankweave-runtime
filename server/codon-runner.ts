@@ -1,12 +1,14 @@
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { Budget } from "./budget.js";
 import { ClaudeAgentSDKManager } from "./claude-agent-sdk-manager.js";
 import { ClaudeLogParser } from "./claude-log-parser.js";
 import { TIMEOUTS } from "./config.js";
 import { CostTracker } from "./cost-tracker.js";
 import type { LlmProviderRegistry } from "./llm/llm-provider-registry.js";
 import type { ModelInfo } from "./llm/models-dev-schema.js";
+import { ReplayProcessManager } from "./replay-process-manager.js";
 import { ShimProcessManager } from "./shim-process-manager.js";
 import {
   extractShimFiles,
@@ -16,6 +18,7 @@ import {
 import type { StateManager } from "./state-manager.js";
 import { TypedEventEmitter } from "./typed-event-emitter.js";
 import type { CodonId, RunId, SessionId } from "./types/branded-types.js";
+import type { BudgetExceededInfo } from "./types/budget-types.js";
 import type {
   AssistantMessage,
   ResultMessage,
@@ -54,6 +57,8 @@ async function resolveShimPath(currentFilePath: string, providerId: string): Pro
   const shimNameMap: Record<string, string> = {
     google: "gemini",
     openai: "codex",
+    pi: "pi",
+    opencode: "opencode",
   };
 
   const shimName = shimNameMap[providerId.toLowerCase()];
@@ -64,12 +69,12 @@ async function resolveShimPath(currentFilePath: string, providerId: string): Pro
   // Check if running from compiled executable
   if (isCompiledExecutable()) {
     // Extract shims if needed
-    if (needsShimExtraction(shimName as "gemini" | "codex")) {
+    if (needsShimExtraction(shimName as "gemini" | "codex" | "pi" | "opencode")) {
       await extractShimFiles();
     }
 
     // Return path to extracted shim
-    return getExtractedShimPath(shimName as "gemini" | "codex");
+    return getExtractedShimPath(shimName as "gemini" | "codex" | "pi" | "opencode");
   }
 
   const currentDir = path.dirname(currentFilePath);
@@ -164,6 +169,14 @@ interface BaseCodonRunnerConfig {
   logPath: string;
   globalSystemPrompt?: string | null;
   shimIdleTimeout?: number;
+  budget: Budget;
+  /** If provided, use ReplayProcessManager instead of real process managers */
+  replayConfig?: {
+    /** Absolute path to the source JSONL log file to replay */
+    sourceLogPath: string;
+    /** Delay in ms between writing lines (default: 5) */
+    replaySpeed?: number;
+  };
 }
 
 /**
@@ -238,12 +251,16 @@ export function shouldExtendCodon(params: {
   extensionCount: number;
   isInterrupted: boolean;
   failureReason: FailureReason | undefined;
+  isBudgetExceeded?: boolean;
 }): boolean {
   // Cannot extend if no extension config
   if (!params.extensionConfig) return false;
 
   // Cannot extend if interrupted (user skip/force-stop)
   if (params.isInterrupted) return false;
+
+  // Cannot extend if budget exceeded
+  if (params.isBudgetExceeded) return false;
 
   // Cannot extend if we've hit the max
   if (params.extensionCount >= params.extensionConfig.maxExtensions) return false;
@@ -267,9 +284,14 @@ export function shouldExtendCodon(params: {
 export class CodonRunner extends TypedEventEmitter<CodonRunnerEvents> {
   private readonly config: CodonRunnerConfig;
   private readonly logParser: ClaudeLogParser;
+  // CostTracker: "how much did this cost?" — computes cost from raw API usage via LLM registry
   private readonly costTracker: CostTracker;
-  private processManager: ShimProcessManager | ClaudeAgentSDKManager;
+  private processManager: ShimProcessManager | ClaudeAgentSDKManager | ReplayProcessManager;
   private readonly logPath: string;
+  private readonly budgetExceededListener: (data: {
+    codonId: string;
+    info: BudgetExceededInfo;
+  }) => void;
   private isCleanedUp = false;
 
   // Track successful result for post-success SDK error handling
@@ -344,6 +366,18 @@ export class CodonRunner extends TypedEventEmitter<CodonRunnerEvents> {
       });
     });
 
+    // Initialize budget tracking — Budget subscribes to CostTracker internally
+    config.budget.trackCodon(config.codonId, config.codon, this.costTracker);
+
+    // Handle budget exceeded: Budget emits event, we kill the process
+    this.budgetExceededListener = (data) => {
+      if (data.codonId === (config.codonId as string)) {
+        config.logger.log(`Budget exceeded for ${config.codonId}: ${data.info.message}`, "error");
+        this.kill("SIGTERM");
+      }
+    };
+    config.budget.on("exceeded", this.budgetExceededListener);
+
     // Create log parser with event forwarding
     this.logParser = this.createLogParser();
 
@@ -365,7 +399,7 @@ export class CodonRunner extends TypedEventEmitter<CodonRunnerEvents> {
    * @returns true if the model can be executed, false otherwise
    */
   static canRun(model: ModelInfo): boolean {
-    const supportedProviders = ["anthropic", "google", "openai"];
+    const supportedProviders = ["anthropic", "google", "openai", "pi", "opencode"];
     return supportedProviders.includes(model.providerId.toLowerCase());
   }
 
@@ -504,7 +538,7 @@ export class CodonRunner extends TypedEventEmitter<CodonRunnerEvents> {
         // Check for failure reasons that would prevent extension
         if (msg.subtype === "error") {
           // Determine failure reason from error type
-          const errorText = String(msg.error || "").toLowerCase();
+          const errorText = String(msg.result || "").toLowerCase();
           if (errorText.includes("timeout") || errorText.includes("timed out")) {
             this.failureReason = { type: "timeout", retriable: true };
           } else if (errorText.includes("rate") || errorText.includes("429")) {
@@ -522,48 +556,65 @@ export class CodonRunner extends TypedEventEmitter<CodonRunnerEvents> {
   }
 
   /**
-   * Create process manager (SDK or Shim) based on model type with event forwarding
+   * Create process manager (SDK, Shim, or Replay) based on model type with event forwarding
    */
-  private createProcessManager(): ShimProcessManager | ClaudeAgentSDKManager {
-    const modelInfo = this.config.codon.model;
+  private createProcessManager():
+    | ShimProcessManager
+    | ClaudeAgentSDKManager
+    | ReplayProcessManager {
+    let processManager: ShimProcessManager | ClaudeAgentSDKManager | ReplayProcessManager;
 
-    // Determine if this is an Anthropic model using providerId
-    const isAnthropicModel = modelInfo.providerId.toLowerCase() === "anthropic";
-
-    let processManager: ShimProcessManager | ClaudeAgentSDKManager;
-
-    if (isAnthropicModel) {
-      // Use Claude Agent SDK for Anthropic models
+    // Replay mode: use ReplayProcessManager instead of real process managers
+    if (this.config.replayConfig) {
       this.config.logger.log(
-        `Using Claude Agent SDK for Anthropic model: ${modelInfo.name} (${modelInfo.providerId}/${modelInfo.modelId})`,
+        `Using ReplayProcessManager for codon ${this.config.codonId} (source: ${this.config.replayConfig.sourceLogPath})`,
         "info",
       );
 
-      processManager = new ClaudeAgentSDKManager(
+      processManager = new ReplayProcessManager(
         this.config.executionPath,
-        this.config.agentRootPath,
         this.config.logger,
         this.logParser,
-        this.config.anthropicBaseUrl,
-        this.config.globalSystemPrompt ?? null,
-        this.config.shimIdleTimeout,
+        this.config.replayConfig.sourceLogPath,
+        this.config.replayConfig.replaySpeed,
       );
     } else {
-      // Use Shim for non-Anthropic models (e.g., Gemini)
-      this.config.logger.log(
-        `Using shim for model: ${modelInfo.name} (${modelInfo.providerId}/${modelInfo.modelId})`,
-        "info",
-      );
+      const modelInfo = this.config.codon.model;
+      const isAnthropicModel = modelInfo.providerId.toLowerCase() === "anthropic";
 
-      processManager = new ShimProcessManager(
-        this.config.executionPath,
-        this.config.agentRootPath,
-        this.config.logger,
-        this.logParser,
-        this.config.anthropicBaseUrl,
-        this.config.globalSystemPrompt ?? null,
-        this.config.shimIdleTimeout,
-      );
+      if (isAnthropicModel) {
+        // Use Claude Agent SDK for Anthropic models
+        this.config.logger.log(
+          `Using Claude Agent SDK for Anthropic model: ${modelInfo.name} (${modelInfo.providerId}/${modelInfo.modelId})`,
+          "info",
+        );
+
+        processManager = new ClaudeAgentSDKManager(
+          this.config.executionPath,
+          this.config.agentRootPath,
+          this.config.logger,
+          this.logParser,
+          this.config.anthropicBaseUrl,
+          this.config.globalSystemPrompt ?? null,
+          this.config.shimIdleTimeout,
+        );
+      } else {
+        // Use Shim for non-Anthropic models (e.g., Gemini)
+        this.config.logger.log(
+          `Using shim for model: ${modelInfo.name} (${modelInfo.providerId}/${modelInfo.modelId})`,
+          "info",
+        );
+
+        processManager = new ShimProcessManager(
+          this.config.executionPath,
+          this.config.agentRootPath,
+          this.config.logger,
+          this.logParser,
+          this.config.anthropicBaseUrl,
+          this.config.globalSystemPrompt ?? null,
+          this.config.shimIdleTimeout,
+        );
+      }
     }
 
     // Forward process manager events to our listeners
@@ -573,6 +624,17 @@ export class CodonRunner extends TypedEventEmitter<CodonRunnerEvents> {
     });
 
     processManager.on("error", (error: Error) => {
+      // Handle budget exceeded: process was killed by us due to budget limit.
+      // Convert to normal exit so handleCodonComplete can process the budget exceeded state.
+      if (this.config.budget.isExceeded(this.config.codonId)) {
+        this.config.logger.log(
+          `[CodonRunner] Budget exceeded abort suppressed: ${error.message}`,
+          "info",
+        );
+        this.emit("exit", 0, false, this.extensionCount);
+        return;
+      }
+
       // Handle known SDK bug: error emitted after successful completion
       // The SDK sometimes emits "only prompt commands are supported in streaming mode"
       // after already reporting success. In this case, treat as successful completion.
@@ -616,6 +678,7 @@ export class CodonRunner extends TypedEventEmitter<CodonRunnerEvents> {
     // Check if we should extend - only possible when extensionConfig is provided
     // The discriminated union guarantees shouldInterrupt exists when extensionConfig does
     const isInterrupted = this.config.shouldInterrupt?.() ?? false;
+    const isBudgetExceeded = this.config.budget.isExceeded(this.config.codonId);
 
     const shouldExtend = shouldExtendCodon({
       exitCode: code,
@@ -625,6 +688,7 @@ export class CodonRunner extends TypedEventEmitter<CodonRunnerEvents> {
       extensionCount: this.extensionCount,
       isInterrupted,
       failureReason: this.failureReason,
+      isBudgetExceeded,
     });
 
     // Type narrowing: if shouldExtend is true, extensionConfig must be defined
@@ -689,28 +753,44 @@ export class CodonRunner extends TypedEventEmitter<CodonRunnerEvents> {
   }
 
   /**
+   * Spawn the underlying process manager using a unified adapter.
+   * ShimProcessManager requires a runtime command array; SDK/Replay do not.
+   */
+  private async spawnCodonProcess(
+    sessionToResume: SessionId | null,
+    options: {
+      logPath?: string;
+      exhaustionPrompt?: string;
+    },
+  ): Promise<void> {
+    if (this.processManager instanceof ShimProcessManager) {
+      const __filename = fileURLToPath(import.meta.url);
+      const shimPath = await resolveShimPath(__filename, this.config.codon.model.providerId);
+
+      await this.processManager.spawn(
+        getRuntimeCommand(shimPath),
+        this.config.codon,
+        sessionToResume,
+        options,
+      );
+      return;
+    }
+
+    // ReplayProcessManager and ClaudeAgentSDKManager share this signature
+    await this.processManager.spawn(this.config.codon, sessionToResume, options);
+  }
+
+  /**
    * Internal method to run an extension (resume session with exhaustion prompt).
    *
    * Uses the same spawn() method as initial run, but with exhaustionPrompt option.
    * This activates exhaustion mode: appends to log, forces resume.
    */
   private async runExtension(sessionId: SessionId, exhaustionPrompt: string): Promise<void> {
-    // Spawn using the unified spawn method with exhaustion mode
-    if (this.processManager instanceof ClaudeAgentSDKManager) {
-      await this.processManager.spawn(this.config.codon, sessionId, {
-        logPath: this.logPath,
-        exhaustionPrompt,
-      });
-    } else {
-      // ShimProcessManager
-      const __filename = fileURLToPath(import.meta.url);
-      const shimPath = await resolveShimPath(__filename, this.config.codon.model.providerId);
-
-      await this.processManager.spawn(getRuntimeCommand(shimPath), this.config.codon, sessionId, {
-        logPath: this.logPath,
-        exhaustionPrompt,
-      });
-    }
+    await this.spawnCodonProcess(sessionId, {
+      logPath: this.logPath,
+      exhaustionPrompt,
+    });
 
     const pid = this.processManager.getPid();
     this.config.logger.log(
@@ -741,24 +821,9 @@ export class CodonRunner extends TypedEventEmitter<CodonRunnerEvents> {
       "info",
     );
 
-    // Spawn using the unified spawn method
-    if (this.processManager instanceof ClaudeAgentSDKManager) {
-      // Claude Agent SDK doesn't need a command array
-      await this.processManager.spawn(this.config.codon, previousSessionId || null, {
-        logPath: this.logPath,
-      });
-    } else {
-      // ShimProcessManager needs command array
-      const __filename = fileURLToPath(import.meta.url);
-      const shimPath = await resolveShimPath(__filename, this.config.codon.model.providerId);
-
-      await this.processManager.spawn(
-        getRuntimeCommand(shimPath),
-        this.config.codon,
-        previousSessionId || null,
-        { logPath: this.logPath },
-      );
-    }
+    await this.spawnCodonProcess(previousSessionId || null, {
+      logPath: this.logPath,
+    });
 
     const pid = this.processManager.getPid();
     this.config.logger.log(
@@ -875,6 +940,9 @@ export class CodonRunner extends TypedEventEmitter<CodonRunnerEvents> {
       this.processManager.removeAllListeners();
       await this.processManager.closeLogStream();
     }
+
+    // Unsubscribe from shared Budget instance to prevent listener leaks
+    this.config.budget.off("exceeded", this.budgetExceededListener);
 
     // Remove all our event listeners
     this.removeAllListeners();

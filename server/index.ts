@@ -34,6 +34,7 @@ import {
   type StartupInfo,
 } from "./utils.js";
 import { renderHankStructure } from "./validate-ascii.js";
+import { renderBudgetResolutionTable } from "./validate-budget.js";
 import { runValidation } from "./validate-command.js";
 import { runWelcomeWizard } from "./wizard/welcome-wizard.js";
 
@@ -160,7 +161,8 @@ async function main() {
     !cliArgs.validate &&
     !cliArgs.cleanup &&
     !cliArgs.attach &&
-    !cliArgs.headless;
+    !cliArgs.headless &&
+    !cliArgs.replayDir;
 
   if (isBareBones) {
     try {
@@ -179,7 +181,7 @@ async function main() {
   // Extract values with defaults
   // Note: configPath is resolved later with directory-aware logic
   const dataSourcePath = cliArgs.dataPath || cliArgs.dataFlag;
-  const executionPath = cliArgs.executionPath;
+  let executionPath = cliArgs.executionPath;
   const inlineInput = cliArgs.inputText;
   const outputPath = cliArgs.outputPath; // --output flag
 
@@ -257,7 +259,7 @@ Examples:
   hankweave -o ./results              Copy outputs to ./results
   hankweave -m opus -p 8080           Use opus model on port 8080
 
-Outputs are stored in ~/.hankweave-executions/{id}/outputs/ by default.
+Outputs are stored in the agent workspace (~/.hankweave-executions/{id}/agentRoot) by default.
 Use --output to copy them elsewhere.
 `);
     await sendCliTelemetry("cli_help", {});
@@ -356,6 +358,28 @@ Use --output to copy them elsewhere.
     resolvedDataPath = path.resolve(dataSourcePath || originalCwd);
   }
 
+  // When resuming an existing execution without explicit --data,
+  // use the data source path stored in execution metadata.
+  // This prevents hash mismatches when CWD differs from original creation dir.
+  if (executionPath && !dataSourcePath && !inlineInput && inputSourceType === "path") {
+    const execMetaPath = path.join(
+      path.resolve(executionPath),
+      ".hankweave",
+      "execution-meta.json",
+    );
+    if (fs.existsSync(execMetaPath)) {
+      try {
+        const execMeta = JSON.parse(fs.readFileSync(execMetaPath, "utf-8"));
+        if (execMeta.readOnlySourceDataPath && fs.existsSync(execMeta.readOnlySourceDataPath)) {
+          resolvedDataPath = execMeta.readOnlySourceDataPath;
+          console.log(`> Using data source from execution metadata: ${resolvedDataPath}`);
+        }
+      } catch {
+        // Non-fatal — fall through to CWD-based resolution
+      }
+    }
+  }
+
   // Directory-aware config path resolution
   // Priority order:
   // 1. Explicit --hank/--config flag (if directory, append /hank.json)
@@ -392,6 +416,35 @@ Use --output to copy them elsewhere.
       }
     } catch {
       // Path doesn't exist or can't be accessed, continue with default
+    }
+  }
+
+  // In replay mode, auto-discover hank config and data paths from execution
+  // metadata when the user didn't explicitly provide them. This makes
+  // `--replay <dir>` self-contained — no need to separately locate the
+  // original hank.json or data source.
+  if (cliArgs.replayDir) {
+    const replayMetaPath = path.join(
+      path.resolve(cliArgs.replayDir),
+      ".hankweave",
+      "execution-meta.json",
+    );
+    if (fs.existsSync(replayMetaPath)) {
+      try {
+        const replayMeta = JSON.parse(fs.readFileSync(replayMetaPath, "utf-8"));
+
+        if (!resolvedConfigPath && replayMeta.hankPath) {
+          resolvedConfigPath = replayMeta.hankPath;
+          console.log(`[REPLAY] Using hank config from execution metadata: ${resolvedConfigPath}`);
+        }
+
+        if (!dataSourcePath && !inlineInput && replayMeta.readOnlySourceDataPath) {
+          resolvedDataPath = replayMeta.readOnlySourceDataPath;
+          console.log(`[REPLAY] Using data source from execution metadata: ${resolvedDataPath}`);
+        }
+      } catch {
+        // Non-fatal — user can still provide --config and --data explicitly
+      }
     }
   }
 
@@ -451,6 +504,7 @@ Use --output to copy them elsewhere.
         startNew,
         modelOverride: resolvedConfig.model, // Pass resolved model override (from all config layers)
         originalUrl: isRemoteHankUrl(configPath) ? configPath : undefined,
+        resolvedBudget: resolvedConfig.budget,
       });
       await sendCliTelemetry("cli_validate", {
         success: true,
@@ -487,6 +541,45 @@ Use --output to copy them elsewhere.
     }
   }
 
+  // ========== REPLAY MODE: copy execution directory ==========
+  // --replay and --execution are mutually exclusive
+  if (resolvedConfig.replayDir && executionPath) {
+    console.error("Error: --replay and --execution cannot be used together.");
+    process.exit(1);
+  }
+
+  // When --replay is used, copy the replay dir to a temp location
+  // so the original execution directory is preserved as a read-only artifact.
+  if (resolvedConfig.replayDir) {
+    const replaySourceDir = path.resolve(resolvedConfig.replayDir);
+    const tempExecDir = path.join(
+      os.tmpdir(),
+      `hankweave-replay-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    );
+    try {
+      fs.cpSync(replaySourceDir, tempExecDir, { recursive: true });
+    } catch (error) {
+      console.error(
+        `Failed to copy replay directory "${replaySourceDir}": ${(error as Error).message}`,
+      );
+      process.exit(1);
+    }
+    // Remove copied runtime lock so a live source run doesn't block replay startup
+    const copiedLock = path.join(tempExecDir, ".hankweave", "runtime.lock");
+    if (fs.existsSync(copiedLock)) {
+      fs.unlinkSync(copiedLock);
+    }
+    executionPath = tempExecDir;
+    process.on("exit", () => {
+      try {
+        fs.rmSync(tempExecDir, { recursive: true, force: true });
+      } catch {
+        // Best-effort cleanup
+      }
+    });
+    console.log(`[REPLAY] Copied execution dir to ${tempExecDir}`);
+  }
+
   // ========== NORMAL MODE BRANCH ==========
   // Only reaches here if NOT in validation mode
 
@@ -502,7 +595,7 @@ Use --output to copy them elsewhere.
       forceMode,
       skipConfirmation,
       hankPath: absoluteConfigPath,
-      ignoreDataMismatch,
+      ignoreDataMismatch: ignoreDataMismatch || !!resolvedConfig.replayDir,
     });
   } catch (error) {
     console.error("[ERROR] Execution setup failed!");
@@ -620,6 +713,26 @@ Use --output to copy them elsewhere.
 
     console.log(structure);
     console.log("");
+
+    // Budget resolution table (if any budget config exists)
+    const hasAnyBudget =
+      validationResult.hankBudget ||
+      codons.some((cfg) =>
+        cfg.type === "loop" ? cfg.budget || cfg.codons.some((cc) => cc.budget) : cfg.budget,
+      );
+
+    if (hasAnyBudget) {
+      const useColor = process.stdout.isTTY ?? false;
+      const budgetTable = renderBudgetResolutionTable({
+        hankBudget: validationResult.hankBudget ?? {},
+        codons,
+        terminalWidth,
+        useColor,
+        resolvedCeiling: resolvedConfig.budget,
+      });
+      console.log(budgetTable);
+      console.log("");
+    }
 
     // Log any non-fatal warnings
     if (warnings.length > 0) {

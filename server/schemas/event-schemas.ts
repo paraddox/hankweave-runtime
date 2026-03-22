@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { BUDGET_CURRENCIES } from "../types/budget-types.js";
 import type { StateTransitionType } from "../types/state-types.js";
 import type { AssertEqual } from "../utils.js";
 
@@ -19,6 +20,13 @@ const failureReasonSchema = z.object({
   retriable: z.boolean(),
   message: z.string().optional(),
   sentinelRefs: z.array(z.string()).optional(), // Which sentinels failed (for sentinel-load-failure)
+});
+
+// Budget exceeded data schema (currency + limit + used)
+const budgetExceededDataSchema = z.object({
+  currency: z.enum(BUDGET_CURRENCIES),
+  limit: z.number(),
+  used: z.number(),
 });
 
 // Token usage schema
@@ -170,6 +178,8 @@ export const codonCompletedEventDataSchema = z.object({
   failureReason: failureReasonSchema.optional(),
   /** True when the failure was ignored due to onFailure: 'ignore' configuration */
   failureIgnored: z.boolean().optional(),
+  /** Present when codon was force-completed due to budget limit */
+  budgetExceeded: budgetExceededDataSchema.optional(),
 });
 
 export const codonExtendedEventDataSchema = z.object({
@@ -195,6 +205,13 @@ export const rigSetupFailedEventDataSchema = z.object({
   exitCode: z.number().optional(),
   commandIndex: z.number().int().nonnegative().optional(),
   ignored: z.boolean(),
+});
+
+export const rigOutputEventDataSchema = z.object({
+  codonId: z.string(),
+  stream: z.enum(["stdout", "stderr"]),
+  line: z.string(),
+  commandIndex: z.number().int().nonnegative(),
 });
 
 export const loopIterationCompletedEventDataSchema = z.object({
@@ -470,6 +487,43 @@ export const sentinelTriggeredEventDataSchema = z.object({
   queueSize: z.number(),
 });
 
+// Budget summary event data schema (end-of-run spending vs. limits)
+const codonBudgetSummaryRowSchema = z.object({
+  codonId: z.string(),
+  loopContext: z
+    .object({
+      loopId: z.string(),
+      iteration: z.number(),
+      codonIndexInLoop: z.number(),
+    })
+    .optional(),
+  status: z.enum(["completed", "failed", "skipped", "exceeded", "running"]),
+  budget: z.object({
+    maxDollars: z.number().optional(),
+    maxTimeSeconds: z.number().optional(),
+    maxOutputTokens: z.number().optional(),
+  }),
+  actual: z.object({
+    dollars: z.number(),
+    timeSeconds: z.number(),
+    outputTokens: z.number(),
+  }),
+});
+
+export const budgetSummaryEventDataSchema = z.object({
+  ceiling: z.object({
+    maxDollars: z.number().optional(),
+    maxTimeSeconds: z.number().optional(),
+  }),
+  allocation: z.enum(["shared", "proportional", "proportional-strict"]),
+  rows: z.array(codonBudgetSummaryRowSchema),
+  totals: z.object({
+    budgetDollars: z.number().optional(),
+    actualDollars: z.number(),
+    actualTimeSeconds: z.number(),
+  }),
+});
+
 // -------------
 // Full Event Schemas
 // -------------
@@ -539,6 +593,11 @@ export const rigSetupCompletedEventSchema = baseEventSchema.extend({
 export const rigSetupFailedEventSchema = baseEventSchema.extend({
   type: z.literal("rig.setup.failed"),
   data: rigSetupFailedEventDataSchema,
+});
+
+export const rigOutputEventSchema = baseEventSchema.extend({
+  type: z.literal("rig.output"),
+  data: rigOutputEventDataSchema,
 });
 
 export const loopIterationCompletedEventSchema = baseEventSchema.extend({
@@ -651,6 +710,11 @@ export const sentinelOutputEventSchema = baseEventSchema.extend({
 export const sentinelTriggeredEventSchema = baseEventSchema.extend({
   type: z.literal("sentinel.triggered"),
   data: sentinelTriggeredEventDataSchema,
+});
+
+export const budgetSummaryEventSchema = baseEventSchema.extend({
+  type: z.literal("budget.summary"),
+  data: budgetSummaryEventDataSchema,
 });
 
 // -------------
@@ -783,6 +847,7 @@ export const serverEventSchema = z.discriminatedUnion("type", [
   fileTreeUpdatedEventSchema,
   rigSetupCompletedEventSchema,
   rigSetupFailedEventSchema,
+  rigOutputEventSchema,
   loopIterationCompletedEventSchema,
   errorEventSchema,
   incompleteCodonEventSchema,
@@ -805,6 +870,7 @@ export const serverEventSchema = z.discriminatedUnion("type", [
   sentinelErrorEventSchema,
   sentinelOutputEventSchema,
   sentinelTriggeredEventSchema,
+  budgetSummaryEventSchema,
 ]);
 
 // -------------
@@ -826,6 +892,7 @@ export type FileUpdatedEvent = z.infer<typeof fileUpdatedEventSchema>;
 export type FileTreeUpdatedEvent = z.infer<typeof fileTreeUpdatedEventSchema>;
 export type RigSetupCompletedEvent = z.infer<typeof rigSetupCompletedEventSchema>;
 export type RigSetupFailedEvent = z.infer<typeof rigSetupFailedEventSchema>;
+export type RigOutputEvent = z.infer<typeof rigOutputEventSchema>;
 export type LoopIterationCompletedEvent = z.infer<typeof loopIterationCompletedEventSchema>;
 export type ErrorEvent = z.infer<typeof errorEventSchema>;
 export type IncompleteCodonEvent = z.infer<typeof incompleteCodonEventSchema>;
@@ -848,6 +915,7 @@ export type SentinelUnloadedEvent = z.infer<typeof sentinelUnloadedEventSchema>;
 export type SentinelErrorEvent = z.infer<typeof sentinelErrorEventSchema>;
 export type SentinelOutputEvent = z.infer<typeof sentinelOutputEventSchema>;
 export type SentinelTriggeredEvent = z.infer<typeof sentinelTriggeredEventSchema>;
+export type BudgetSummaryEvent = z.infer<typeof budgetSummaryEventSchema>;
 
 // -------------
 // Event Category Classification
@@ -900,6 +968,7 @@ const SERVER_STATE_EVENT_TYPES_ARRAY = [
   "loop.iteration.completed",
   "archive.completed",
   "archive.partial",
+  "budget.summary",
 ] as const;
 
 /**
@@ -912,6 +981,7 @@ const AGENTIC_BACKBONE_EVENT_TYPES_ARRAY = [
   "filetree.updated",
   "rig.setup.completed",
   "rig.setup.failed",
+  "rig.output",
 ] as const;
 
 /**
@@ -984,7 +1054,8 @@ export type ServerStateEvent =
   | StateTransitionEvent
   | LoopIterationCompletedEvent
   | ArchiveCompletedEvent
-  | ArchivePartialEvent;
+  | ArchivePartialEvent
+  | BudgetSummaryEvent;
 
 /**
  * Union type representing all agentic backbone events.
@@ -996,7 +1067,8 @@ export type AgenticBackboneEvent =
   | FileUpdatedEvent
   | FileTreeUpdatedEvent
   | RigSetupCompletedEvent
-  | RigSetupFailedEvent;
+  | RigSetupFailedEvent
+  | RigOutputEvent;
 
 /**
  * Union type representing all sentinel events.
@@ -1161,6 +1233,7 @@ export const serverEventDataSchemas: Record<ServerEventType, z.ZodSchema> = {
   "filetree.updated": fileTreeUpdatedEventDataSchema,
   "rig.setup.completed": rigSetupCompletedEventDataSchema,
   "rig.setup.failed": rigSetupFailedEventDataSchema,
+  "rig.output": rigOutputEventDataSchema,
   "loop.iteration.completed": loopIterationCompletedEventDataSchema,
   error: errorEventDataSchema,
   "incomplete.codon": incompleteCodonEventDataSchema,
@@ -1183,6 +1256,7 @@ export const serverEventDataSchemas: Record<ServerEventType, z.ZodSchema> = {
   "sentinel.error": sentinelErrorEventDataSchema,
   "sentinel.output": sentinelOutputEventDataSchema,
   "sentinel.triggered": sentinelTriggeredEventDataSchema,
+  "budget.summary": budgetSummaryEventDataSchema,
 };
 
 // List of all valid event types (for sentinel validation)

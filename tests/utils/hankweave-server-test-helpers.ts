@@ -10,6 +10,7 @@ import type {
   CodonCompletedEvent,
   CodonStartedEvent,
   ServerEventType,
+  ServerReadyEvent,
 } from "../../server/schemas/event-schemas.js";
 import type { HankweaveState } from "../../server/types/state-types.js";
 import {
@@ -20,6 +21,26 @@ import {
 } from "../../server/types/types.js";
 import { WebSocket } from "../../server/utils.js";
 import { generateTestTimestamp, setupTestDirectory } from "./test-helpers.js";
+
+// -------------
+// Error Types
+// -------------
+
+/**
+ * Thrown when the hankweave server process exits before a WebSocket connection
+ * can be established (e.g. validation errors, config errors).
+ * Carries the process exit code and captured stderr for test assertions.
+ */
+export class ServerLaunchError extends Error {
+  constructor(
+    message: string,
+    public readonly exitCode: number | null,
+    public readonly stderr: string,
+  ) {
+    super(message);
+    this.name = "ServerLaunchError";
+  }
+}
 
 // -------------
 // WebSocket Client Setup Helpers
@@ -180,6 +201,8 @@ export interface LaunchServerOptions {
     command: string;
     args: string[];
   };
+  /** Replay directory path - replays LLM logs instead of making real API calls */
+  replayDir?: string;
   /** Additional CLI args to append to the server command */
   extraArgs?: string[];
 }
@@ -404,7 +427,8 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  */
 export async function launchHankweave(options: LaunchServerOptions = {}): Promise<LaunchedServer> {
   const cwd = options.cwd ? path.resolve(options.cwd) : DEFAULT_CWD;
-  const env = { ...process.env, ...options.env };
+  // Always show costs in tests to aid debugging when inspecting TUI output
+  const env = { ...process.env, HANKWEAVE_RUNTIME_SHOW_COSTS: "1", ...options.env };
   const logPrefix = options.logPrefix ?? DEFAULT_LOG_PREFIX;
   const port = options.port ?? DEFAULT_PORT;
   const websocketTimeout =
@@ -432,12 +456,12 @@ export async function launchHankweave(options: LaunchServerOptions = {}): Promis
 
   // Prepare an isolated execution directory similar to other E2E helpers.
   const testTimestamp = generateTestTimestamp();
-  const executionDir = options.executionDir
+  let executionDir = options.executionDir
     ? path.resolve(cwd, options.executionDir)
     : path.join(testAreaDir, `execution-${testTimestamp}`);
   const testRunDir = path.join(testResultsDir, `basic-server-${testTimestamp}`);
 
-  if (!options.reuseTestDirectory) {
+  if (!options.reuseTestDirectory && !options.replayDir) {
     await setupTestDirectory({
       testDir: executionDir,
       testResultsDir,
@@ -451,15 +475,16 @@ export async function launchHankweave(options: LaunchServerOptions = {}): Promis
   let needsShell = false;
 
   // Use space-separated syntax (not --flag=value which is deprecated)
+  // Skip --execution when --replay is set (replay mode auto-copies the execution dir)
   const serverArgs = [
     "--config",
     configPath,
     "--data",
     dataSourcePath,
-    "--execution",
-    executionDir,
+    ...(options.replayDir ? [] : ["--execution", executionDir]),
     "--port",
     String(port),
+    ...(options.replayDir ? ["--replay", path.resolve(cwd, options.replayDir)] : []),
     ...(options.extraArgs ?? []),
   ];
 
@@ -496,8 +521,10 @@ export async function launchHankweave(options: LaunchServerOptions = {}): Promis
       });
   });
 
+  let stderrBuffer = "";
   child.stderr?.on("data", (data) => {
     const text = data.toString();
+    stderrBuffer += text;
     text
       .split(/\r?\n/)
       .filter(
@@ -524,7 +551,11 @@ export async function launchHankweave(options: LaunchServerOptions = {}): Promis
 
   while (attempt < websocketAttempts) {
     if (serverExited || child.exitCode !== null || child.signalCode !== null) {
-      throw new Error("Server exited before WebSocket connection could be established");
+      throw new ServerLaunchError(
+        "Server exited before WebSocket connection could be established",
+        child.exitCode,
+        stderrBuffer,
+      );
     }
 
     try {
@@ -593,6 +624,12 @@ export async function launchHankweave(options: LaunchServerOptions = {}): Promis
       // Regular server events
       const serverEvent: ServerEvent = data;
       events.push(serverEvent);
+
+      // Update executionDir from server.ready event (needed for replay mode
+      // where the server copies the execution dir to a temp location)
+      if (serverEvent.type === "server.ready") {
+        executionDir = (serverEvent as ServerReadyEvent).data.executionPath;
+      }
 
       // Resolve any waiting promises for this event type
       const waiters = eventPromises.get(serverEvent.type);
@@ -965,15 +1002,18 @@ export async function launchHankweave(options: LaunchServerOptions = {}): Promis
     throw new Error(`Timeout waiting for state after ${timeoutMs}ms`);
   }
 
-  const serverLogFilePath = path.join(executionDir, ".hankweave/logs/server.log");
+  function getServerLogFilePath(): string {
+    return path.join(executionDir, ".hankweave/logs/server.log");
+  }
 
   function getServerLogFile(): string {
-    if (!fs.existsSync(serverLogFilePath)) {
-      throw new Error(`Server log file not found: ${serverLogFilePath}`);
+    const logPath = getServerLogFilePath();
+    if (!fs.existsSync(logPath)) {
+      throw new Error(`Server log file not found: ${logPath}`);
     }
 
     try {
-      return fs.readFileSync(serverLogFilePath, "utf-8");
+      return fs.readFileSync(logPath, "utf-8");
     } catch (error) {
       throw new Error(
         `Failed to read server log file: ${error instanceof Error ? error.message : String(error)}`,
@@ -1008,7 +1048,9 @@ export async function launchHankweave(options: LaunchServerOptions = {}): Promis
     client,
     clientId,
     events,
-    executionDir,
+    get executionDir() {
+      return executionDir;
+    },
     sendCommand,
     getEvents,
     waitForEvent,
@@ -1024,7 +1066,9 @@ export async function launchHankweave(options: LaunchServerOptions = {}): Promis
     hasLockFile,
     getState,
     waitForState,
-    serverLogFilePath,
+    get serverLogFilePath() {
+      return getServerLogFilePath();
+    },
     serverLogFile: getServerLogFile,
   };
 }

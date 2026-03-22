@@ -31,6 +31,9 @@ const VALUE_FLAGS = new Set([
   "-i",
   "--output",
   "-o",
+  "--replay",
+  "--max-cost",
+  "--max-time",
 ]);
 
 /**
@@ -124,6 +127,7 @@ export interface ParsedCliArgs extends Omit<Partial<HankweaveConfig>, "version">
   attach?: boolean; // --attach
   ignoreDataMismatch?: boolean; // --ignore-data-mismatch (deprecated, use --force)
   overwriteOutput?: boolean; // --overwrite-output
+  replayDir?: string; // --replay <path> - replay from an execution directory dump
 }
 
 /**
@@ -278,12 +282,35 @@ export function parseCliArgs(args: string[]): ParsedCliArgs {
     result.shimIdleTimeout = parsed;
   }
 
+  // Parse maxCost (--max-cost)
+  const maxCostArg = getFlagValue(args, "--max-cost");
+  if (maxCostArg) {
+    const parsed = parseFloat(maxCostArg);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      throw new Error(`Invalid --max-cost value: "${maxCostArg}" (must be a positive number)`);
+    }
+    result.budget = { ...result.budget, maxDollars: parsed };
+  }
+
+  // Parse maxTime (--max-time)
+  const maxTimeArg = getFlagValue(args, "--max-time");
+  if (maxTimeArg) {
+    const parsed = parseFloat(maxTimeArg);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      throw new Error(
+        `Invalid --max-time value: "${maxTimeArg}" (must be a positive number, in seconds)`,
+      );
+    }
+    result.budget = { ...result.budget, maxTimeSeconds: parsed };
+  }
+
   // Parse value flags (non-config)
   result.configPath = getFlagValue(args, "--config");
   result.dataFlag = getFlagValue(args, "--data");
   result.executionPath = getFlagValue(args, "--execution") || getFlagValue(args, "-e");
   result.inputText = getFlagValue(args, "--input") || getFlagValue(args, "-i");
   result.outputPath = getFlagValue(args, "--output") || getFlagValue(args, "-o");
+  result.replayDir = getFlagValue(args, "--replay");
 
   // Parse boolean flags (non-config)
   result.headless = args.includes("--headless");
